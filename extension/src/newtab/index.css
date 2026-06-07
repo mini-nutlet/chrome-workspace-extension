@@ -1310,6 +1310,11 @@ body {
   border-left-color: var(--group-gray);
 }
 
+/* Ungrouped card spans the full grid width */
+.group-card-ungrouped {
+  grid-column: 1 / -1;
+}
+
 /* ── Context Menu (Opt 9) ────────────────────────────────── */
 
 .context-menu {

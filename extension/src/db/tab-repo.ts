@@ -176,20 +176,28 @@ export async function upsertTab(tab: {
 
 export async function removeTab(windowId: number, chromeTabId: number, currentWsId: number): Promise<void> {
   const db = await getDb();
-  const idx = db.transaction("tabs").store.index("windowChrome");
-  const existing = await idx.get([windowId, chromeTabId]);
+
+  // Primary lookup: windowChrome index (matches live browser tabs).
+  let existing = await db.transaction("tabs").store.index("windowChrome").get([windowId, chromeTabId]);
+
+  // Fallback: snapshot tabs store chrome_tab_id = -(tab_id).
+  // If the windowChrome index was changed by a prior multi-workspace
+  // removal, we can still find the row by its primary key.
+  if (!existing && windowId === 0 && chromeTabId < 0) {
+    existing = await db.transaction("tabs").store.get(-chromeTabId);
+  }
+
   if (!existing) return;
 
   const tabId = existing.id!;
   const tx = db.transaction("tabWorkspaces", "readwrite");
 
-  // Remove junction for Current workspace
+  // Remove junction for the requested workspace.
   const twIdx = tx.store.index("tabWorkspace");
   const tw = await twIdx.get([tabId, currentWsId]);
   if (tw) await tx.store.delete(tw.id!);
 
-  // Mark inactive elsewhere
-  const wsIdx = tx.store.index("workspaceId"); // not used directly; iterate all
+  // Mark inactive in any other workspace that still references this tab.
   const allTw = await tx.store.getAll();
   for (const row of allTw) {
     if (row.tabId === tabId && row.workspaceId !== currentWsId) {
@@ -199,18 +207,15 @@ export async function removeTab(windowId: number, chromeTabId: number, currentWs
   }
   await tx.done;
 
-  // Check remaining refs
+  // Clean up the shared tab row if no workspace references it any more.
   const remaining = (await db.getAll("tabWorkspaces")).filter((r: TabWorkspaceRow) => r.tabId === tabId);
   if (remaining.length === 0) {
     await db.delete("tabs", tabId);
-  } else {
-    const row = await db.get("tabs", tabId);
-    if (row) {
-      row.windowId = 0;
-      row.chromeTabId = -(tabId);
-      await db.put("tabs", row);
-    }
   }
+  // When other workspaces still reference this tab, leave the tab row
+  // untouched so its windowChrome index stays consistent for future
+  // delete / navigate calls.  is_open is already handled by the
+  // cross-reference in refreshTree (context.tsx).
 }
 
 export async function findDuplicate(url: string): Promise<{

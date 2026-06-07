@@ -72,24 +72,18 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   }, [addTabToGroup, refreshTree]);
 
   // Handle drop on empty area — auto-create group based on domain rules.
+  // Reuses an existing group when a case-insensitive name match exists.
   const handleDropAutoGroup = useCallback(async (
     data: { url: string; title: string; windowId: number; chromeTabId: number; active?: boolean },
   ) => {
     const groupName = getGroupNameForUrl(data.url);
-    // Create the group.
-    await createTabGroup(groupName);
-    // Wait a tick for tree to refresh, then find the new group.
-    setTimeout(async () => {
-      try {
-        const allGroups = await api.listTabGroups(wsId);
-        const match = allGroups.find((g) => g.name === groupName);
-        if (match) {
-          await addTabToGroup(data, match.id);
-          await refreshTree();
-        }
-      } catch { /* ignore */ }
-    }, 200);
-  }, [getGroupNameForUrl, createTabGroup, wsId, addTabToGroup, refreshTree]);
+    // Look for an existing group with a case-insensitive name match.
+    const allGroups = await api.listTabGroups(wsId);
+    const match = allGroups.find((g) => g.name.toLowerCase() === groupName.toLowerCase());
+    const group = match ?? await api.createTabGroup(wsId, groupName);
+    await addTabToGroup(data, group.id);
+    await refreshTree();
+  }, [getGroupNameForUrl, wsId, addTabToGroup, refreshTree]);
 
   const handleCreateGroup = async () => {
     if (!newGroupName.trim()) return;
@@ -115,29 +109,64 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   };
 
   // Close all duplicate tabs in a group, keeping only one per URL.
+  // In the Current workspace, duplicates are browser tabs (×N badge) —
+  //   close all but one browser tab per URL.
+  // In other workspaces, duplicates are snapshot DB entries — delete extras.
   const handleCloseDuplicates = async (
     tabs: { window_id: number; chrome_tab_id: number; url: string }[],
   ) => {
-    const seen = new Set<string>();
-    const dupes: typeof tabs = [];
-    for (const tab of tabs) {
-      const normalized = api.normalizeUrl(tab.url);
-      if (seen.has(normalized)) {
-        dupes.push(tab);
-      } else {
-        seen.add(normalized);
+    let didClose = false;
+
+    if (isCurrent) {
+      // Current workspace: close duplicate browser tabs per URL.
+      // The tree already has one entry per unique URL (upsert dedup),
+      // but multiple browser tabs may be open with that URL.
+      const allOpenTabs = await chrome.tabs.query({});
+      // Build map: normalized URL → list of browser tabs.
+      const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
+      for (const t of allOpenTabs) {
+        if (!t.url || t.id == null) continue;
+        const norm = api.normalizeUrl(t.url);
+        if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
+        browserByUrl.get(norm)!.push(t);
+      }
+      // Only act on URLs that appear in this group.
+      const groupUrls = new Set(tabs.map((t) => api.normalizeUrl(t.url)));
+      for (const [normUrl, browserTabs] of browserByUrl) {
+        if (!groupUrls.has(normUrl)) continue;
+        if (browserTabs.length > 1) {
+          // Keep the active tab if any, otherwise the first.
+          const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
+          for (const t of browserTabs) {
+            if (t.id !== keep.id) {
+              try { await chrome.tabs.remove(t.id!); didClose = true; } catch {}
+            }
+          }
+        }
+      }
+    } else {
+      // Other workspaces: deduplicate DB entries.
+      // Live tabs (chrome_tab_id > 0) are preferred; snapshots are removed.
+      const sorted = [...tabs].sort((a, b) => {
+        const aLive = a.chrome_tab_id > 0 ? 1 : 0;
+        const bLive = b.chrome_tab_id > 0 ? 1 : 0;
+        return bLive - aLive;
+      });
+      const seen = new Set<string>();
+      for (const tab of sorted) {
+        const normalized = api.normalizeUrl(tab.url);
+        if (seen.has(normalized)) {
+          if (tab.chrome_tab_id > 0) {
+            try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
+          }
+          try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); didClose = true; } catch {}
+        } else {
+          seen.add(normalized);
+        }
       }
     }
-    for (const tab of dupes) {
-      // Close the specific duplicate browser tab by chrome_tab_id.
-      if (tab.chrome_tab_id > 0) {
-        try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
-      }
-      if (isCurrent) {
-        try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); } catch {}
-      }
-    }
-    await refreshTree();
+
+    if (didClose) await refreshTree();
   };
 
   // Shared drop handler for external tabs (no-group zone + ungrouped zone).
@@ -223,26 +252,27 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
               isCurrent={isCurrent}
             />
           ))}
-        </div>
-      )}
-
-      {/* Ungrouped tabs — tabs with no group assignment (group_id=0).
-          These appear when the Ungrouped group is missing; they are a safety net. */}
-      {ungroupedTabs.length > 0 && (
-        <div className="ungrouped-section" style={{ marginTop: 12 }}>
-          <div className="section-header" style={{ marginBottom: 8 }}>
-            <h3 className="section-title" style={{ fontSize: 13, color: 'var(--text-secondary)' }}>Ungrouped</h3>
-            <span className="section-count">{ungroupedTabs.length}</span>
-          </div>
-          {ungroupedTabs.map((tab) => (
-            <DraggableTab
-              key={tab.id}
-              tab={tab}
-              onNavigate={navigate}
-              onClose={deleteTab}
-              isCurrent={isCurrent}
-            />
-          ))}
+          {/* Ungrouped tabs — special section spanning the full grid. */}
+          {ungroupedTabs.length > 0 && (
+            <div className="group-card group-card-ungrouped" data-group-color="gray" style={{ marginBottom: 12 }}>
+              <div className="group-header" style={{ padding: '6px 10px' }}>
+                <div className="group-color-dot" style={{ background: 'var(--group-gray)' }} />
+                <span className="group-name">Ungrouped</span>
+                <span className="group-count">{ungroupedTabs.length}</span>
+              </div>
+              <div className="group-body">
+                {ungroupedTabs.map((tab) => (
+                  <DraggableTab
+                    key={tab.id}
+                    tab={tab}
+                    onNavigate={navigate}
+                    onClose={deleteTab}
+                    isCurrent={isCurrent}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

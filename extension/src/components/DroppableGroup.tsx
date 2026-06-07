@@ -45,9 +45,11 @@ export function DroppableGroup({
     setRenaming(true);
   };
 
+  const isUngrouped = group.name === "Ungrouped";
+
   const handleRenameSubmit = () => {
     const trimmed = renameName.trim();
-    if (trimmed && trimmed !== group.name) {
+    if (trimmed && trimmed !== group.name && !isUngrouped) {
       onUpdateGroup(group.id, { name: trimmed });
     }
     setRenaming(false);
@@ -58,15 +60,13 @@ export function DroppableGroup({
     onDeleteGroup(group.id);
   };
 
-  // Auto-delete empty groups in the Current workspace.
-  // When the last tab is removed from a group (either individually or via
-  // close-all), the group card re-renders with 0 tabs and we clean it up.
-  // The "Ungrouped" group is protected — it's the default bucket for new tabs.
+  // Auto-delete empty groups in the Current workspace (including Ungrouped).
+  // Ungrouped will be recreated on-demand when a new tab needs it.
   useEffect(() => {
-    if (isCurrent && group.tabs.length === 0 && group.id > 0 && group.name !== 'Ungrouped') {
+    if (isCurrent && group.tabs.length === 0 && group.id > 0) {
       onDeleteGroup(group.id);
     }
-  }, [isCurrent, group.tabs.length, group.id, group.name, onDeleteGroup]);
+  }, [isCurrent, group.tabs.length, group.id, onDeleteGroup]);
 
   const hasBody = !collapsed && group.tabs.length > 0;
 
@@ -112,14 +112,18 @@ export function DroppableGroup({
             autoFocus
           />
         ) : (
-          <span className="group-name" onDoubleClick={handleRenameStart}>
+          <span
+            className="group-name"
+            onDoubleClick={isUngrouped ? undefined : handleRenameStart}
+            title={isUngrouped ? "Ungrouped is a special group" : undefined}
+          >
             {group.name}
           </span>
         )}
         <span className="group-count">{group.tabs.length}</span>
 
-        {/* Group actions — hidden for Current (auto-generated groups). */}
-        {!isCurrent && (
+        {/* Group actions — hidden for Current (auto-generated groups) and Ungrouped. */}
+        {!isCurrent && !isUngrouped && (
         <span className="group-actions">
           <button
             className="group-action-btn"

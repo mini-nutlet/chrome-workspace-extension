@@ -437,10 +437,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     for (const tab of tree.ungrouped_tabs) allTabs.push(tab);
     if (allTabs.length === 0) return;
 
-    // Keep first tab per normalized URL, close the rest.
+    // Sort live tabs first so they're kept, snapshots closed as dupes.
+    const sorted = [...allTabs].sort((a, b) => {
+      const aLive = a.chrome_tab_id > 0 ? 1 : 0;
+      const bLive = b.chrome_tab_id > 0 ? 1 : 0;
+      return bLive - aLive;
+    });
     const seen = new Set<string>();
     const dupes: Tab[] = [];
-    for (const tab of allTabs) {
+    for (const tab of sorted) {
       const n = api.normalizeUrl(tab.url);
       if (seen.has(n)) dupes.push(tab);
       else seen.add(n);
@@ -451,7 +456,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       try { await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); } catch {}
     }
-    await new Promise((r) => setTimeout(r, 300));
+    if (dupes.length > 0) await new Promise((r) => setTimeout(r, 300));
     await refreshTree();
   }, [currentWsId, tree, refreshTree]);
 
