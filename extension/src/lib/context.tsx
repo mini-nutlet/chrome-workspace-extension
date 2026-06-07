@@ -430,6 +430,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const closeAllDuplicateTabs = useCallback(async () => {
     if (currentWsId <= 0) return;
+    const currentWs = workspaces.find((w) => w.id === currentWsId);
+    const isCurrent = currentWs?.name === "Current" && currentWs?.parent_id === 0;
+
+    // Collect all tabs from the tree (both grouped and ungrouped).
     const allTabs: Tab[] = [];
     for (const group of tree.groups) {
       for (const tab of group.tabs) allTabs.push(tab);
@@ -437,28 +441,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
     for (const tab of tree.ungrouped_tabs) allTabs.push(tab);
     if (allTabs.length === 0) return;
 
-    // Sort live tabs first so they're kept, snapshots closed as dupes.
-    const sorted = [...allTabs].sort((a, b) => {
-      const aLive = a.chrome_tab_id > 0 ? 1 : 0;
-      const bLive = b.chrome_tab_id > 0 ? 1 : 0;
-      return bLive - aLive;
-    });
-    const seen = new Set<string>();
-    const dupes: Tab[] = [];
-    for (const tab of sorted) {
-      const n = api.normalizeUrl(tab.url);
-      if (seen.has(n)) dupes.push(tab);
-      else seen.add(n);
-    }
-    for (const tab of dupes) {
-      if (tab.chrome_tab_id > 0) {
-        try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
+    let didClose = false;
+
+    if (isCurrent) {
+      // Current workspace: close duplicate browser tabs per URL.
+      // The tree has one entry per unique URL (upsert dedup), but multiple
+      // browser tabs may be open with that URL (visible via ×N badge).
+      const allOpenTabs = await chrome.tabs.query({});
+      const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
+      for (const t of allOpenTabs) {
+        if (!t.url || t.id == null) continue;
+        const norm = api.normalizeUrl(t.url);
+        if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
+        browserByUrl.get(norm)!.push(t);
       }
-      try { await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); } catch {}
+      const wsUrls = new Set(allTabs.map((t) => api.normalizeUrl(t.url)));
+      for (const [normUrl, browserTabs] of browserByUrl) {
+        if (!wsUrls.has(normUrl)) continue;
+        if (browserTabs.length > 1) {
+          const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
+          for (const t of browserTabs) {
+            if (t.id !== keep.id) {
+              try { await chrome.tabs.remove(t.id!); didClose = true; } catch {}
+            }
+          }
+        }
+      }
+    } else {
+      // Other workspaces: deduplicate DB entries.
+      // Live tabs (chrome_tab_id > 0) are preferred; snapshots are removed.
+      const sorted = [...allTabs].sort((a, b) => {
+        const aLive = a.chrome_tab_id > 0 ? 1 : 0;
+        const bLive = b.chrome_tab_id > 0 ? 1 : 0;
+        return bLive - aLive;
+      });
+      const seen = new Set<string>();
+      for (const tab of sorted) {
+        const n = api.normalizeUrl(tab.url);
+        if (seen.has(n)) {
+          if (tab.chrome_tab_id > 0) {
+            try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
+          }
+          try { await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); didClose = true; } catch {}
+        } else {
+          seen.add(n);
+        }
+      }
     }
-    if (dupes.length > 0) await new Promise((r) => setTimeout(r, 300));
-    await refreshTree();
-  }, [currentWsId, tree, refreshTree]);
+
+    if (didClose) {
+      await new Promise((r) => setTimeout(r, 300));
+      await refreshTree();
+    }
+  }, [currentWsId, workspaces, tree, refreshTree]);
 
   const closeAllWorkspaceTabs = useCallback(async () => {
     if (currentWsId <= 0) return;
