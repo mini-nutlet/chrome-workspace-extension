@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.exe
+*.exe~
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+Thumbs.db
+tsconfig.tsbuildinfo

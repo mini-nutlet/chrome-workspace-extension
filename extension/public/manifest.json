@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Workspace Browser Companion",
+  "version": "1.0",
+  "description": "Pure frontend workspace tab manager — no backend required",
+  "permissions": ["tabs", "storage", "sidePanel", "notifications", "alarms"],
+  "host_permissions": [],
+  "chrome_url_overrides": {
+    "newtab": "newtab.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "options_ui": {
+    "page": "settings.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "Workspace Companion"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "commands": {
+    "quick-search": {
+      "suggested_key": { "default": "Ctrl+Shift+K", "mac": "Command+Shift+K" },
+      "description": "Focus search in Workspace Companion"
+    }
+  }
+}
