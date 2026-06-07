@@ -119,23 +119,21 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
 
     if (isCurrent) {
       // Current workspace: close duplicate browser tabs per URL.
-      // The tree already has one entry per unique URL (upsert dedup),
-      // but multiple browser tabs may be open with that URL.
+      // Use aggressive normalisation (strips query string) so that URLs
+      // differing only in query params are treated as duplicates —
+      // matching the DB's hashUrl behaviour.
       const allOpenTabs = await chrome.tabs.query({});
-      // Build map: normalized URL → list of browser tabs.
       const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
       for (const t of allOpenTabs) {
         if (!t.url || t.id == null) continue;
-        const norm = api.normalizeUrl(t.url);
+        const norm = api.normalizeUrlAggressive(t.url);
         if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
         browserByUrl.get(norm)!.push(t);
       }
-      // Only act on URLs that appear in this group.
-      const groupUrls = new Set(tabs.map((t) => api.normalizeUrl(t.url)));
+      const groupUrls = new Set(tabs.map((t) => api.normalizeUrlAggressive(t.url)));
       for (const [normUrl, browserTabs] of browserByUrl) {
         if (!groupUrls.has(normUrl)) continue;
         if (browserTabs.length > 1) {
-          // Keep the active tab if any, otherwise the first.
           const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
           for (const t of browserTabs) {
             if (t.id !== keep.id) {

@@ -122,6 +122,22 @@ export function normalizeUrl(u: string): string {
   } catch { return u; }
 }
 
+/**
+ * Aggressive URL normalisation — also strips the query string so that
+ * URLs differing only in query params are treated as duplicates.
+ * Matches the DB's hashUrl behaviour used for upsert dedup.
+ */
+export function normalizeUrlAggressive(u: string): string {
+  try {
+    const p = new URL(u);
+    p.hash = "";
+    p.search = "";
+    p.hostname = p.hostname.replace(/^www\./, "");
+    if (p.pathname.endsWith("/") && p.pathname.length > 1) p.pathname = p.pathname.slice(0, -1);
+    return p.toString().toLowerCase();
+  } catch { return u.toLowerCase(); }
+}
+
 export async function closeBrowserTabByUrl(url: string): Promise<boolean> {
   const allTabs = await chrome.tabs.query({});
   const target = normalizeUrl(url);

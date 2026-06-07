@@ -445,17 +445,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     if (isCurrent) {
       // Current workspace: close duplicate browser tabs per URL.
-      // The tree has one entry per unique URL (upsert dedup), but multiple
-      // browser tabs may be open with that URL (visible via ×N badge).
+      // Use aggressive normalisation (strips query string) so that URLs
+      // differing only in query params are treated as duplicates —
+      // matching the DB's hashUrl behaviour.
       const allOpenTabs = await chrome.tabs.query({});
       const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
       for (const t of allOpenTabs) {
         if (!t.url || t.id == null) continue;
-        const norm = api.normalizeUrl(t.url);
+        const norm = api.normalizeUrlAggressive(t.url);
         if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
         browserByUrl.get(norm)!.push(t);
       }
-      const wsUrls = new Set(allTabs.map((t) => api.normalizeUrl(t.url)));
+      const wsUrls = new Set(allTabs.map((t) => api.normalizeUrlAggressive(t.url)));
       for (const [normUrl, browserTabs] of browserByUrl) {
         if (!wsUrls.has(normUrl)) continue;
         if (browserTabs.length > 1) {
