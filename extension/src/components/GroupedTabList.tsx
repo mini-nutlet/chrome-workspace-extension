@@ -230,8 +230,29 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
         </div>
       )}
 
-      {/* No groups empty state */}
-      {groups.length === 0 ? (
+      {/* Group grid — only when there are regular groups */}
+      {groups.length > 0 && (
+        <div className="group-grid">
+          {groups.map((group) => (
+            <DroppableGroup
+              key={group.id}
+              group={group}
+              onNavigate={navigate}
+              onCloseTab={deleteTab}
+              onDeleteGroup={deleteTabGroup}
+              onUpdateGroup={updateTabGroup}
+              onDropTab={moveTabToGroup}
+              onDropExternal={handleDropExternal}
+              onCloseAll={handleCloseAll}
+              onCloseDuplicates={handleCloseDuplicates}
+              isCurrent={isCurrent}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* No groups and no ungrouped tabs → empty state */}
+      {groups.length === 0 && ungroupedTabs.length === 0 && (
         isCurrent ? (
           <div className="empty-state" style={{ padding: "32px 16px" }}>
             <div className="empty-state-text">No tabs yet</div>
@@ -248,45 +269,25 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
             <span>No groups — drag tabs here to auto-create</span>
           </div>
         )
-      ) : (
+      )}
+
+      {/* Ungrouped tabs — always shown when present, even without groups. */}
+      {ungroupedTabs.length > 0 && (
         <>
-          <div className="group-grid">
-            {groups.map((group) => (
-              <DroppableGroup
-                key={group.id}
-                group={group}
+          <div className="ungrouped-divider">
+            <span className="ungrouped-divider-label">Ungrouped · {ungroupedTabs.length}</span>
+          </div>
+          <div className="ungrouped-tabs">
+            {ungroupedTabs.map((tab) => (
+              <DraggableTab
+                key={tab.id}
+                tab={tab}
                 onNavigate={navigate}
-                onCloseTab={deleteTab}
-                onDeleteGroup={deleteTabGroup}
-                onUpdateGroup={updateTabGroup}
-                onDropTab={moveTabToGroup}
-                onDropExternal={handleDropExternal}
-                onCloseAll={handleCloseAll}
-                onCloseDuplicates={handleCloseDuplicates}
+                onClose={deleteTab}
                 isCurrent={isCurrent}
               />
             ))}
           </div>
-
-          {/* Ungrouped tabs — subtle divider + compact list below the grid. */}
-          {ungroupedTabs.length > 0 && (
-            <>
-              <div className="ungrouped-divider">
-                <span className="ungrouped-divider-label">Ungrouped · {ungroupedTabs.length}</span>
-              </div>
-              <div className="ungrouped-tabs">
-                {ungroupedTabs.map((tab) => (
-                  <DraggableTab
-                    key={tab.id}
-                    tab={tab}
-                    onNavigate={navigate}
-                    onClose={deleteTab}
-                    isCurrent={isCurrent}
-                  />
-                ))}
-              </div>
-            </>
-          )}
         </>
       )}
     </div>
