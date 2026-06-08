@@ -1,6 +1,6 @@
 import type { Tab } from "../lib/types";
 import { IconGrip, IconX, IconTrash } from "./Icons";
-import { closeBrowserTabByUrl } from "../lib/api";
+import { closeBrowserTabByUrl, normalizeUrlAggressive } from "../lib/api";
 
 interface DraggableTabProps {
   tab: Tab;
@@ -89,6 +89,35 @@ export function DraggableTab({ tab, onNavigate, onClose, isCurrent }: DraggableT
         <div className="tab-url">{cleanUrl(tab.url)}</div>
       </div>
       <div className="tab-actions">
+        {/* Close duplicate tabs — closes all other browser tabs with
+            the same URL (aggressive normalisation), keeping this one. */}
+        {isOpen && (tab.open_count ?? 0) > 1 && (
+          <button
+            className="tab-close"
+            title="Close duplicate tabs"
+            onClick={async (e) => {
+              e.stopPropagation();
+              const target = normalizeUrlAggressive(tab.url);
+              const allTabs = await chrome.tabs.query({});
+              for (const t of allTabs) {
+                if (t.id == null || !t.url) continue;
+                if (t.id === tab.chrome_tab_id) continue; // keep this one
+                if (normalizeUrlAggressive(t.url) === target) {
+                  try { await chrome.tabs.remove(t.id); } catch {}
+                  // Also remove from DB for Current workspace.
+                  if (isCurrent) {
+                    try { await onClose(t.windowId, t.id); } catch {}
+                  }
+                }
+              }
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M8 12h8"/>
+            </svg>
+          </button>
+        )}
         {/* Close Tab button (X) — only shown when the tab is currently open in
             the browser (green dot). Clicking it closes the browser tab;
             the background worker then marks the record as inactive. */}
