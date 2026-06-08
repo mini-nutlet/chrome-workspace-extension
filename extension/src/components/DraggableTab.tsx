@@ -1,6 +1,6 @@
 import type { Tab } from "../lib/types";
 import { IconGrip, IconX, IconTrash } from "./Icons";
-import { closeBrowserTabByUrl, normalizeUrlAggressive } from "../lib/api";
+import { normalizeUrlAggressive } from "../lib/api";
 
 interface DraggableTabProps {
   tab: Tab;
@@ -118,20 +118,22 @@ export function DraggableTab({ tab, onNavigate, onClose, isCurrent }: DraggableT
             </svg>
           </button>
         )}
-        {/* Close Tab button (X) — only shown when the tab is currently open in
-            the browser (green dot). Clicking it closes the browser tab;
-            the background worker then marks the record as inactive. */}
+        {/* Close Tab (X) — closes ALL browser tabs with this URL (including
+            duplicates) and removes them from the DB. Does not keep snapshots. */}
         {isOpen && (
           <button
             className="tab-close"
-            title="Close Tab"
+            title="Close all tabs with this URL"
             onClick={async (e) => {
               e.stopPropagation();
-              // Close the matching browser tab by URL.
-              await closeBrowserTabByUrl(tab.url);
-              // For Current workspace, immediately remove from DB and refresh UI.
-              if (isCurrent) {
-                await onClose(tab.window_id, tab.chrome_tab_id);
+              const target = normalizeUrlAggressive(tab.url);
+              const allTabs = await chrome.tabs.query({});
+              for (const t of allTabs) {
+                if (t.id == null || !t.url) continue;
+                if (normalizeUrlAggressive(t.url) === target) {
+                  try { await chrome.tabs.remove(t.id); } catch {}
+                  try { await onClose(t.windowId, t.id); } catch {}
+                }
               }
             }}
           >
