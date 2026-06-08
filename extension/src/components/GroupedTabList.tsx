@@ -25,9 +25,22 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   const [newGroupName, setNewGroupName] = useState("");
   const [showNewGroup, setShowNewGroup] = useState(false);
 
-  const groups = tree?.groups ?? [];
-  const ungroupedTabs = tree?.ungrouped_tabs ?? [];
+  const allGroups = tree?.groups ?? [];
+  const rawUngrouped = tree?.ungrouped_tabs ?? [];
   const wsId = currentWsId;
+
+  // In the Current workspace the "Ungrouped" group is a proper group
+  // (groupId > 0).  Pull it out of the grid so it renders as the
+  // subtle divider + compact list below.
+  const ungroupedGroup = isCurrent
+    ? allGroups.find((g) => g.name === "Ungrouped")
+    : null;
+  const groups = isCurrent
+    ? allGroups.filter((g) => g.name !== "Ungrouped")
+    : allGroups;
+  const ungroupedTabs = ungroupedGroup
+    ? ungroupedGroup.tabs
+    : rawUngrouped;
 
   // ── Auto-create group from domain rules ──────────────────────────────
   const getGroupNameForUrl = useCallback((url: string): string => {
