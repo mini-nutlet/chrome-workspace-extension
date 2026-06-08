@@ -234,31 +234,32 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
           </div>
         )
       ) : (
-        <div className="group-grid">
-          {groups.map((group) => (
-            <DroppableGroup
-              key={group.id}
-              group={group}
-              onNavigate={navigate}
-              onCloseTab={deleteTab}
-              onDeleteGroup={deleteTabGroup}
-              onUpdateGroup={updateTabGroup}
-              onDropTab={moveTabToGroup}
-              onDropExternal={handleDropExternal}
-              onCloseAll={handleCloseAll}
-              onCloseDuplicates={handleCloseDuplicates}
-              isCurrent={isCurrent}
-            />
-          ))}
-          {/* Ungrouped tabs — special section spanning the full grid. */}
+        <>
+          <div className="group-grid">
+            {groups.map((group) => (
+              <DroppableGroup
+                key={group.id}
+                group={group}
+                onNavigate={navigate}
+                onCloseTab={deleteTab}
+                onDeleteGroup={deleteTabGroup}
+                onUpdateGroup={updateTabGroup}
+                onDropTab={moveTabToGroup}
+                onDropExternal={handleDropExternal}
+                onCloseAll={handleCloseAll}
+                onCloseDuplicates={handleCloseDuplicates}
+                isCurrent={isCurrent}
+              />
+            ))}
+          </div>
+
+          {/* Ungrouped tabs — subtle divider + compact list below the grid. */}
           {ungroupedTabs.length > 0 && (
-            <div className="group-card group-card-ungrouped" data-group-color="gray" style={{ marginBottom: 12 }}>
-              <div className="group-header" style={{ padding: '6px 10px' }}>
-                <div className="group-color-dot" style={{ background: 'var(--group-gray)' }} />
-                <span className="group-name">Ungrouped</span>
-                <span className="group-count">{ungroupedTabs.length}</span>
+            <>
+              <div className="ungrouped-divider">
+                <span className="ungrouped-divider-label">Ungrouped · {ungroupedTabs.length}</span>
               </div>
-              <div className="group-body">
+              <div className="ungrouped-tabs">
                 {ungroupedTabs.map((tab) => (
                   <DraggableTab
                     key={tab.id}
@@ -269,9 +270,9 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
                   />
                 ))}
               </div>
-            </div>
+            </>
           )}
-        </div>
+        </>
       )}
     </div>
   );
