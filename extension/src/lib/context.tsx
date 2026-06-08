@@ -469,8 +469,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
     } else {
-      // Other workspaces: deduplicate DB entries.
-      // Live tabs (chrome_tab_id > 0) are preferred; snapshots are removed.
+      // Other workspaces: deduplicate DB entries by aggressive URL.
+      // Use aggressive normalisation (strips protocol + query) so that
+      // http→https variants and minor query differences are caught.
       const sorted = [...allTabs].sort((a, b) => {
         const aLive = a.chrome_tab_id > 0 ? 1 : 0;
         const bLive = b.chrome_tab_id > 0 ? 1 : 0;
@@ -478,7 +479,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
       const seen = new Set<string>();
       for (const tab of sorted) {
-        const n = api.normalizeUrl(tab.url);
+        const n = api.normalizeUrlAggressive(tab.url);
         if (seen.has(n)) {
           if (tab.chrome_tab_id > 0) {
             try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}

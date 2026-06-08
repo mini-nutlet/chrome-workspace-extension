@@ -143,7 +143,9 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
         }
       }
     } else {
-      // Other workspaces: deduplicate DB entries.
+      // Other workspaces: deduplicate DB entries by aggressive URL.
+      // Use aggressive normalisation (strips protocol + query) so that
+      // http→https variants and minor query differences are caught.
       // Live tabs (chrome_tab_id > 0) are preferred; snapshots are removed.
       const sorted = [...tabs].sort((a, b) => {
         const aLive = a.chrome_tab_id > 0 ? 1 : 0;
@@ -152,7 +154,7 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
       });
       const seen = new Set<string>();
       for (const tab of sorted) {
-        const normalized = api.normalizeUrl(tab.url);
+        const normalized = api.normalizeUrlAggressive(tab.url);
         if (seen.has(normalized)) {
           if (tab.chrome_tab_id > 0) {
             try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
