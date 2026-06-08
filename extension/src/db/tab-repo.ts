@@ -314,3 +314,19 @@ export async function getTab(id: number): Promise<Tab | null> {
   if (!row) return null;
   return toApi(row);
 }
+
+/** Update an existing tab row's windowId / chromeTabId (e.g. after the
+ *  user reopens a closed snapshot tab).  Bypasses URL dedup — the caller
+ *  already knows which row to update. */
+export async function updateTabWindow(id: number, windowId: number, chromeTabId: number, title: string, url: string): Promise<void> {
+  const db = await getDb();
+  const row = await db.get("tabs", id);
+  if (!row) return;
+  row.windowId = windowId;
+  row.chromeTabId = chromeTabId;
+  row.title = title;
+  row.url = url;
+  row.urlHash = hashUrl(url);
+  row.updatedAt = now();
+  await db.put("tabs", row);
+}

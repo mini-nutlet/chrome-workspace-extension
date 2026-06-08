@@ -4,7 +4,7 @@ import { closeBrowserTabByUrl } from "../lib/api";
 
 interface DraggableTabProps {
   tab: Tab;
-  onNavigate: (url: string, kind: string) => void;
+  onNavigate: (url: string, kind: string, existingTabId?: number) => void;
   onClose: (windowId: number, chromeTabId: number) => void;
   isCurrent?: boolean;
 }
@@ -68,7 +68,7 @@ export function DraggableTab({ tab, onNavigate, onClose, isCurrent }: DraggableT
         e.dataTransfer.setData("text/tab-id", String(tab.id));
         e.dataTransfer.effectAllowed = "move";
       }}
-      onClick={() => onNavigate(tab.url, "tab")}
+      onClick={() => onNavigate(tab.url, "tab", tab.id)}
       title={closed ? "Click to reopen this tab" : undefined}
     >
       <span className="tab-grip"><IconGrip size={14} /></span>

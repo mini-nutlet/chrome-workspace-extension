@@ -26,7 +26,7 @@ interface AppActions {
   refreshWorkspaces: () => Promise<void>;
   refreshTree: () => Promise<void>;
   refreshRules: () => Promise<void>;
-  navigate: (url: string, kind: string) => void;
+  navigate: (url: string, kind: string, existingTabId?: number) => void;
   createWorkspace: (name: string, icon?: string, parentId?: number, afterId?: number) => Promise<void>;
   deleteWorkspace: (id: number) => Promise<void>;
   createTabGroup: (name: string, color?: string) => Promise<void>;
@@ -568,7 +568,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await api.deleteSession(currentWsId);
     setHasSession(false);
   }, [currentWsId]);
-  const navigate = useCallback(async (url: string, kind: string) => {
+  const navigate = useCallback(async (url: string, kind: string, existingTabId?: number) => {
     // Helper: optimistically mark the given URL as active and open in the tree.
     const markActive = (targetUrl: string) => {
       const targetNorm = api.normalizeUrl(targetUrl);
@@ -614,14 +614,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     markActive(url);
     if (tab.id && currentWsId > 0) {
       try {
-        await api.upsertTab({
-          window_id: tab.windowId,
-          chrome_tab_id: tab.id,
-          workspace_id: currentWsId,
-          title: tab.title ?? "",
-          url: tab.url ?? url,
-          active: true,
-        });
+        if (existingTabId) {
+          // Update the existing DB row directly — avoids URL-dedup issues
+          // (e.g. http→https redirect producing a different hash).
+          await api.updateTabWindow(existingTabId, tab.windowId, tab.id, tab.title ?? "", tab.url ?? url);
+        } else {
+          await api.upsertTab({
+            window_id: tab.windowId,
+            chrome_tab_id: tab.id,
+            workspace_id: currentWsId,
+            title: tab.title ?? "",
+            url: tab.url ?? url,
+            active: true,
+          });
+        }
       } catch { /* non-critical */ }
     }
     // Delay to let Chrome settle, then refresh to confirm state.
