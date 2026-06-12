@@ -351,7 +351,7 @@ async function periodicFullSync(): Promise<void> {
     for (const dbTab of allDbTabs) {
       if (dbTab.chrome_tab_id > 0 && !liveIds.has(dbTab.chrome_tab_id)) {
         try {
-          await api.removeTab(dbTab.window_id, dbTab.chrome_tab_id, curId);
+          await api.removeTab(dbTab.window_id, dbTab.chrome_tab_id, curId, dbTab.id);
           cleaned++;
         } catch { /* skip */ }
       }

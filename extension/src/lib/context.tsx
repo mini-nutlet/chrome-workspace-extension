@@ -537,8 +537,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     await refreshTree();
   }, [currentWsId, refreshTree]);
 
-  const deleteTab = useCallback(async (windowId: number, chromeTabId: number) => {
-    await api.removeTab(windowId, chromeTabId, currentWsId);
+  const deleteTab = useCallback(async (windowId: number, chromeTabId: number, tabDbId?: number) => {
+    await api.removeTab(windowId, chromeTabId, currentWsId, tabDbId);
     await refreshTree();
   }, [currentWsId, refreshTree]);
 

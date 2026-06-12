@@ -5,7 +5,7 @@ import { normalizeUrlAggressive } from "../lib/api";
 interface DraggableTabProps {
   tab: Tab;
   onNavigate: (url: string, kind: string, existingTabId?: number) => void;
-  onClose: (windowId: number, chromeTabId: number) => void;
+  onClose: (windowId: number, chromeTabId: number, tabDbId?: number) => void;
   isCurrent?: boolean;
 }
 
@@ -148,7 +148,7 @@ export function DraggableTab({ tab, onNavigate, onClose, isCurrent }: DraggableT
             title="Delete"
             onClick={async (e) => {
               e.stopPropagation();
-              await onClose(tab.window_id, tab.chrome_tab_id);
+              await onClose(tab.window_id, tab.chrome_tab_id, tab.id);
             }}
           >
             <IconTrash size={12} />
