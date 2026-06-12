@@ -2,6 +2,42 @@
 // Uses the `idb` library for a clean Promise-based API.
 import { openDB, type IDBPDatabase } from "idb";
 
+// ── Similarity rule types (mirrors lib/types.ts) ─────────────────────
+export type SimRuleType = "ignore_query" | "ignore_hash" | "ignore_path_query";
+
+export interface SimilarityRule {
+  id: string;
+  domain_pattern: string;
+  rule_type: SimRuleType;
+  enabled: boolean;
+  /** When true, a duplicate on this domain auto-switches. */
+  auto_switch: boolean;
+}
+
+let cachedSimRules: SimilarityRule[] | null = null;
+let simRulesLoadPromise: Promise<SimilarityRule[]> | null = null;
+
+/** Load similarity rules from chrome.storage.local, with in-memory cache. */
+export async function loadSimilarityRules(): Promise<SimilarityRule[]> {
+  if (cachedSimRules) return cachedSimRules;
+  if (simRulesLoadPromise) return simRulesLoadPromise;
+  simRulesLoadPromise = (async () => {
+    try {
+      const result = await chrome.storage.local.get("similarityRules");
+      const raw = (result.similarityRules as SimilarityRule[]) || [];
+      // Normalise: old rules may lack auto_switch.
+      cachedSimRules = raw.map((r) => ({ ...r, auto_switch: r.auto_switch ?? false }));
+    } catch {
+      cachedSimRules = [];
+    }
+    return cachedSimRules;
+  })();
+  return simRulesLoadPromise;
+}
+
+/** Invalidate the similarity-rules cache (call when settings change). */
+export function invalidateSimRulesCache() { cachedSimRules = null; simRulesLoadPromise = null; }
+
 export interface WorkspaceRow {
   id?: number;
   parentId: number;
@@ -136,12 +172,61 @@ export function now(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Default aggressive hash — strips query + hash + www, lowercases.
+ * Used when no cached similarity rules are available (synchronous path).
+ */
 export function hashUrl(url: string): string {
   try {
     const u = new URL(url);
     u.hash = "";
     u.search = "";
     u.hostname = u.hostname.replace(/^www\./, "");
+    return u.toString().toLowerCase();
+  } catch {
+    return url.toLowerCase();
+  }
+}
+
+/**
+ * Similarity-aware URL hashing — applies per-domain rules.
+ * Must be called after loadSimilarityRules() has populated the cache.
+ */
+export function hashUrlWithRules(url: string, simRules: SimilarityRule[]): string {
+  try {
+    const u = new URL(url);
+    const hostname = u.hostname.replace(/^www\./, "");
+
+    // Find the best-matching rule for this domain.
+    let matchedRule: SimilarityRule | null = null;
+    for (const rule of simRules) {
+      if (!rule.enabled) continue;
+      if (hostname.includes(rule.domain_pattern)) {
+        matchedRule = rule;
+        break; // first match wins (rules are sorted by priority)
+      }
+    }
+
+    if (matchedRule) {
+      switch (matchedRule.rule_type) {
+        case "ignore_path_query":
+          // Keep only hostname
+          return hostname.toLowerCase();
+        case "ignore_hash":
+          // Strip hash; keep query + path
+          u.hash = "";
+          break;
+        case "ignore_query":
+          // Strip query; keep hash + path
+          u.search = "";
+          break;
+      }
+    } else {
+      // No rule matched — default aggressive: strip both hash + query
+      u.hash = "";
+      u.search = "";
+    }
+
     return u.toString().toLowerCase();
   } catch {
     return url.toLowerCase();

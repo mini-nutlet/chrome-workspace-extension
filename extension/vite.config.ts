@@ -12,7 +12,7 @@ export default defineConfig({
   build: {
     outDir: "dist",
     modulePreload: { polyfill: false },
-    emptyOutDir: false,
+    emptyOutDir: true,
     rollupOptions: {
       input: {
         sidepanel: resolve(__dirname, "sidepanel.html"),

@@ -47,7 +47,7 @@ export async function createTabGroup(workspaceId: number, name: string, color = 
     workspaceId, name, color, collapsed: 0, sortOrder,
     createdAt: now(), updatedAt: now(),
   });
-  return (await db.get("tabGroups", id)) as unknown as TabGroup;
+  return toApi(await db.get("tabGroups", id) as TabGroupRow);
 }
 
 export async function updateTabGroup(id: number, updates: {
@@ -80,11 +80,19 @@ export async function deleteTabGroup(id: number): Promise<void> {
   const twList = (await db.getAll("tabWorkspaces")).filter((tw: any) => tw.groupId === id);
   for (const tw of twList) {
     const tab = await db.get("tabs", tw.tabId);
+    // Delete the junction entry.
+    await db.delete("tabWorkspaces", tw.id!);
     if (tab) {
-      // Delete the junction entry.
-      await db.delete("tabWorkspaces", tw.id!);
-      // If this tab is a snapshot (chrome_tab_id <= 0) and has no other workspace refs, delete the tab row.
+      // If this tab is a snapshot (chrome_tab_id <= 0) and has no other
+      // workspace refs, delete the tab row so it doesn't become an orphan.
       if (tab.chromeTabId <= 0) {
+        const remaining = (await db.getAll("tabWorkspaces")).filter((r: any) => r.tabId === tab.id!);
+        if (remaining.length === 0) {
+          await db.delete("tabs", tab.id!);
+        }
+      } else {
+        // Live tab — also check if any workspace still references it.
+        // If not, clean up the orphan tab row.
         const remaining = (await db.getAll("tabWorkspaces")).filter((r: any) => r.tabId === tab.id!);
         if (remaining.length === 0) {
           await db.delete("tabs", tab.id!);

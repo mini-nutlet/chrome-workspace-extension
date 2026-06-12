@@ -93,6 +93,9 @@ export interface SimilarityRule {
   domain_pattern: string;
   rule_type: SimRuleType;
   enabled: boolean;
+  /** When true, a duplicate on this domain auto-switches to the existing
+   *  tab instead of showing a notification prompt. */
+  auto_switch: boolean;
 }
 
 export type SimRuleType = "ignore_query" | "ignore_hash" | "ignore_path_query";

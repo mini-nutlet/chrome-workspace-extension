@@ -62,7 +62,7 @@ export function DraggableTab({ tab, onNavigate, onClose, isCurrent }: DraggableT
   return (
     <div
       className={`tab-row${closed ? " tab-closed" : ""}`}
-      draggable={isOpen}
+      draggable={isOpen && !isCurrent}
       onDragStart={(e) => {
         if (closed) { e.preventDefault(); return; }
         e.dataTransfer.setData("text/tab-id", String(tab.id));

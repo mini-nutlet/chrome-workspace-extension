@@ -11,6 +11,9 @@ export interface Workspace {
   updated_at: string;
 }
 
+/** Reserved name for the auto-tracking workspace. */
+export const CURRENT_WS_NAME = "Current";
+
 function toApi(row: WorkspaceRow): Workspace {
   return {
     id: row.id!,
@@ -39,6 +42,14 @@ export async function getWorkspace(id: number): Promise<Workspace | null> {
 export async function createWorkspace(
   name: string, description = "", icon = "", parentId = 0, afterId = 0
 ): Promise<Workspace> {
+  // "Current" is the reserved auto-tracking workspace — only one may exist.
+  if (name === CURRENT_WS_NAME && parentId === 0) {
+    const db = await getDb();
+    const all = await db.getAll("workspaces");
+    const existing = all.find((w: WorkspaceRow) => w.name === CURRENT_WS_NAME && w.parentId === 0);
+    if (existing) throw new Error(`"${CURRENT_WS_NAME}" workspace already exists`);
+  }
+
   const db = await getDb();
   const tx = db.transaction("workspaces", "readwrite");
   const store = tx.objectStore("workspaces");
@@ -77,6 +88,12 @@ export async function updateWorkspace(id: number, fields: {
   const db = await getDb();
   const row = await db.get("workspaces", id);
   if (!row) return null;
+  // Block renaming any workspace to the reserved "Current" name.
+  if (fields.name === CURRENT_WS_NAME && row.name !== CURRENT_WS_NAME && row.parentId === 0) {
+    const all = await db.getAll("workspaces");
+    const existing = all.find((w: WorkspaceRow) => w.name === CURRENT_WS_NAME && w.parentId === 0);
+    if (existing) throw new Error(`"${CURRENT_WS_NAME}" is a reserved workspace name`);
+  }
   Object.assign(row, {
     name: fields.name ?? row.name,
     description: fields.description ?? row.description,

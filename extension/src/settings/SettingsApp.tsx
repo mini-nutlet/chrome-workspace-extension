@@ -18,6 +18,7 @@ function newSimRule(): SimilarityRule {
     domain_pattern: "",
     rule_type: "ignore_query",
     enabled: true,
+    auto_switch: false,
   };
 }
 
@@ -130,7 +131,9 @@ export function SettingsApp() {
           </button>
         </div>
         <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 10 }}>
-          Custom rules override the default URL-hash duplicate detection. Matched by domain.
+          Custom rules override the default URL-hash duplicate detection. Matched by domain.<br />
+          <strong>⚡ Auto-switch</strong>: when a duplicate is detected, immediately switch to the
+          existing tab without showing a notification.
         </p>
         <div className="card" style={{ overflow: "hidden" }}>
           {simRules.length === 0 && (
@@ -182,6 +185,23 @@ export function SettingsApp() {
                 style={{ color: rule.enabled ? "var(--accent)" : "var(--text-tertiary)" }}
               >
                 {rule.enabled ? "✓" : "✕"}
+              </button>
+              <button
+                className="icon-btn"
+                onClick={() => {
+                  const updated = [...simRules];
+                  updated[idx] = { ...updated[idx]!, auto_switch: !rule.auto_switch };
+                  saveSimRules(updated);
+                }}
+                title={rule.auto_switch ? "Auto-switch ON — click to disable" : "Auto-switch OFF — click to enable"}
+                style={{
+                  color: rule.auto_switch ? "var(--accent)" : "var(--text-tertiary)",
+                  fontWeight: rule.auto_switch ? 700 : 400,
+                  fontSize: 11,
+                  minWidth: 24,
+                }}
+              >
+                {rule.auto_switch ? "⚡" : "—"}
               </button>
               <button
                 className="icon-btn"

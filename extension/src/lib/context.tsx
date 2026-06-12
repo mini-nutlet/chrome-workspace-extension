@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import type { Workspace, Tab, TabGroupTree, AutoGroupRule, SearchResult } from "./types";
 import * as api from "./api";
 
@@ -197,17 +197,77 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // ── initial load ──────────────────────────────────────────────────
   useEffect(() => {
     refreshWorkspaces();
     refreshRules();
-    chrome.storage.local.get("currentWorkspaceId", (r) => {
-      setCurrentWsId((r.currentWorkspaceId as number) || 0);
-    });
   }, []);
 
+  // Once workspaces are loaded, restore the last selection or auto-select
+  // the "Current" workspace so the UI immediately shows live browser tabs.
   useEffect(() => {
-    refreshTree();
+    if (workspaces.length === 0) return;
+    if (currentWsId > 0) return; // already selected
+
+    chrome.storage.local.get("currentWorkspaceId", (r) => {
+      const stored = (r.currentWorkspaceId as number) || 0;
+      if (stored > 0 && workspaces.some((w) => w.id === stored)) {
+        setCurrentWsId(stored);
+      } else {
+        const cur = workspaces.find((w) => w.name === "Current" && w.parent_id === 0);
+        if (cur) {
+          setCurrentWsId(cur.id);
+          chrome.storage.local.set({ currentWorkspaceId: cur.id });
+        }
+      }
+    });
+  }, [workspaces, currentWsId]);
+
+  // ── data refresh (driven by currentWsId) ─────────────────────────
+  // On first load the background worker may still be syncing tabs into
+  // the DB.  Retry once after a short delay if the tree is empty.
+  const initialLoadDone = useRef(false);
+  useEffect(() => {
+    if (currentWsId <= 0) return;
+    const doRefresh = async () => {
+      await refreshTree();
+      if (!initialLoadDone.current) {
+        initialLoadDone.current = true;
+        // Re-check tree state after a moment — the service worker
+        // may still be running startup sync.
+        setTimeout(async () => {
+          // Only retry if tree came back empty the first time.
+          const t = await api.getTabGroupTree(currentWsId);
+          const tt = ensureTree(t);
+          const total = tt.groups.reduce((s, g) => s + g.tabs.length, 0) + tt.ungrouped_tabs.length;
+          if (total === 0) {
+            // Still empty — give the background one more cycle.
+            setTimeout(() => refreshTree(), 2000);
+          } else {
+            refreshTree(); // data arrived — show it
+          }
+        }, 1500);
+      }
+    };
+    doRefresh();
   }, [currentWsId, refreshTree]);
+
+  // ── visibility refresh ────────────────────────────────────────────
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refreshTree();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refreshTree]);
+
+  // ── periodic refresh ──────────────────────────────────────────────
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") refreshTree();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [refreshTree]);
 
   // ── search helpers ──────────────────────────────────────────────────
 
@@ -382,16 +442,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     const uniqueUrls = [...new Set(allUrls)];
 
+    // Suppress duplicate notifications for these URLs — they are
+    // intentionally being opened as a batch and already exist in the DB.
+    chrome.runtime.sendMessage({ type: "suppress-dupes", urls: uniqueUrls }).catch(() => {});
+
     // Find which tabs are already open in the browser (outside the target window).
     const openTabs = await chrome.tabs.query({});
 
     // Helper to match a URL against a browser tab.
+    // Use aggressive normalisation so query-param differences don't
+    // prevent matching (consistent with DB dedup behaviour).
     const matchTab = (url: string, excludeWindowId?: number) =>
       openTabs.find(
         (t) =>
           t.url &&
           t.id != null &&
-          api.normalizeUrl(t.url) === api.normalizeUrl(url) &&
+          api.normalizeUrlAggressive(t.url) === api.normalizeUrlAggressive(url) &&
           (excludeWindowId == null || t.windowId !== excludeWindowId),
       );
 
@@ -542,19 +608,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const session = await api.restoreSession(currentWsId);
     if (session.tabs && session.tabs.length > 0) {
       // Check for existing open tabs to avoid duplicates.
+      // Use aggressive normalisation so that http→https and query-param
+      // differences don't cause duplicate tabs to be opened.
       const openTabs = await chrome.tabs.query({});
-      const openUrls = new Set(openTabs.filter((t) => t.url).map((t) => t.url!));
+      const normalizedOpen = new Set(
+        openTabs.filter((t) => t.url).map((t) => api.normalizeUrlAggressive(t.url!)),
+      );
 
-      const tabsToOpen = session.tabs.filter((t) => !openUrls.has(t.url));
+      const tabsToOpen = session.tabs.filter(
+        (t) => !normalizedOpen.has(api.normalizeUrlAggressive(t.url)),
+      );
       if (tabsToOpen.length > 0) {
+        // Suppress duplicate notifications while restoring.
+        chrome.runtime.sendMessage({
+          type: "suppress-dupes",
+          urls: tabsToOpen.map((t) => t.url),
+        }).catch(() => {});
+
         for (let i = 0; i < tabsToOpen.length; i++) {
-          await chrome.tabs.create({ url: tabsToOpen[i]!.url, active: i === 0 });
+          const t = tabsToOpen[i]!;
+          const created = await chrome.tabs.create({ url: t.url, active: i === 0 });
+          // Re-associate the opened tab with the target workspace so the
+          // restored tabs appear in the correct workspace, not just Current.
+          if (created.id && currentWsId > 0) {
+            try {
+              await api.upsertTab({
+                window_id: created.windowId,
+                chrome_tab_id: created.id,
+                workspace_id: currentWsId,
+                title: created.title ?? t.title,
+                url: created.url ?? t.url,
+                active: i === 0,
+                group_id: t.group_id,
+                snapshot: true,
+              });
+            } catch { /* non-critical */ }
+          }
         }
       } else {
         // All already open — switch to the first one.
         const first = session.tabs[0];
         if (first) {
-          const match = openTabs.find((t) => t.url === first.url);
+          const match = openTabs.find(
+            (t) => t.url && api.normalizeUrlAggressive(t.url) === api.normalizeUrlAggressive(first.url),
+          );
           if (match && match.id != null && match.windowId != null) {
             await chrome.windows.update(match.windowId, { focused: true });
             await chrome.tabs.update(match.id, { active: true });
@@ -571,21 +668,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [currentWsId]);
   const navigate = useCallback(async (url: string, kind: string, existingTabId?: number) => {
     // Helper: optimistically mark the given URL as active and open in the tree.
+    // Uses aggressive normalisation for consistency with DB dedup and dupe detection.
     const markActive = (targetUrl: string) => {
-      const targetNorm = api.normalizeUrl(targetUrl);
+      const targetNorm = api.normalizeUrlAggressive(targetUrl);
       setTree((prev) => ({
         groups: prev.groups.map((g) => ({
           ...g,
           tabs: g.tabs.map((t) => ({
             ...t,
-            is_open: t.is_open || api.normalizeUrl(t.url) === targetNorm,
-            active: api.normalizeUrl(t.url) === targetNorm,
+            is_open: t.is_open || api.normalizeUrlAggressive(t.url) === targetNorm,
+            active: api.normalizeUrlAggressive(t.url) === targetNorm,
           })),
         })),
         ungrouped_tabs: prev.ungrouped_tabs.map((t) => ({
           ...t,
-          is_open: t.is_open || api.normalizeUrl(t.url) === targetNorm,
-          active: api.normalizeUrl(t.url) === targetNorm,
+          is_open: t.is_open || api.normalizeUrlAggressive(t.url) === targetNorm,
+          active: api.normalizeUrlAggressive(t.url) === targetNorm,
         })),
       }));
     };
@@ -593,9 +691,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (kind === "tab") {
       try {
         const tabs = await chrome.tabs.query({});
-        const normalized = api.normalizeUrl(url);
+        const normalized = api.normalizeUrlAggressive(url);
         let match = tabs.find((t) => t.url === url);
-        if (!match) match = tabs.find((t) => t.url && api.normalizeUrl(t.url) === normalized);
+        if (!match) match = tabs.find((t) => t.url && api.normalizeUrlAggressive(t.url) === normalized);
         if (match && match.id != null && match.windowId != null) {
           await chrome.windows.update(match.windowId, { focused: true });
           await chrome.tabs.update(match.id, { active: true });

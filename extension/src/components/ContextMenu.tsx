@@ -72,12 +72,20 @@ export function ContextMenu({ x, y, isTopLevel, isCurrent, onSelect, onClose }: 
   }, []);
 
   // Adjust position so the menu doesn't overflow the viewport.
-  const style: React.CSSProperties = { left: x, top: y };
-  if (ref.current) {
+  // Measure after first paint so the ref is available — inline
+  // measurement during render would always see `null`.
+  const [pos, setPos] = useState<{ left: number; top: number }>({ left: x, top: y });
+  useEffect(() => {
+    if (!ref.current) return;
     const rect = ref.current.getBoundingClientRect();
-    if (rect.right > window.innerWidth) style.left = x - rect.width;
-    if (rect.bottom > window.innerHeight) style.top = y - rect.height;
-  }
+    const adjusted = { left: x, top: y };
+    if (rect.right > window.innerWidth) adjusted.left = x - rect.width;
+    if (rect.bottom > window.innerHeight) adjusted.top = y - rect.height;
+    setPos(adjusted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [x, y]);
+
+  const style: React.CSSProperties = { left: pos.left, top: pos.top };
 
   // Current workspace (Opt 20): no actions available — permanent & independent.
   let kinds: MenuAction["kind"][];

@@ -72,11 +72,15 @@ export function DroppableGroup({
 
   return (
     <div
-      className={`group-card${dragOver ? " drag-over" : ""}`}
+      className={`group-card${dragOver ? " drag-over" : ""}${isCurrent ? " group-card-current" : ""}`}
       data-group-color={group.color || "gray"}
-      onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+      onDragOver={(e) => {
+        if (isCurrent) return; // no manual regrouping in Current
+        e.preventDefault(); setDragOver(true);
+      }}
       onDragLeave={() => setDragOver(false)}
       onDrop={(e) => {
+        if (isCurrent) return; // no manual regrouping in Current
         e.preventDefault();
         setDragOver(false);
         const tabId = e.dataTransfer.getData("text/tab-id");
@@ -122,16 +126,20 @@ export function DroppableGroup({
         )}
         <span className="group-count">{group.tabs.length}</span>
 
-        {/* Group actions — hidden for Current (auto-generated groups) and Ungrouped. */}
-        {!isCurrent && !isUngrouped && (
+        {/* Group actions — hidden for Current (auto-generated groups).
+            Ungrouped in non-Current workspaces: delete only (no rename,
+            the name is canonical).  Other non-Current groups: full edit. */}
+        {!isCurrent && (
         <span className="group-actions">
-          <button
-            className="group-action-btn"
-            title="Rename group"
-            onClick={handleRenameStart}
-          >
-            <IconEdit size={12} />
-          </button>
+          {!isUngrouped && (
+            <button
+              className="group-action-btn"
+              title="Rename group"
+              onClick={handleRenameStart}
+            >
+              <IconEdit size={12} />
+            </button>
+          )}
           <button
             className="group-action-btn group-action-danger"
             title="Delete group"

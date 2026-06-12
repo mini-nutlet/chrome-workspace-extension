@@ -1,4 +1,4 @@
-import { getDb, now, hashUrl, type TabRow, type TabWorkspaceRow } from "./database";
+import { getDb, now, hashUrl, hashUrlWithRules, loadSimilarityRules, type SimilarityRule, type TabRow, type TabWorkspaceRow } from "./database";
 
 export interface Tab {
   id: number;
@@ -46,12 +46,25 @@ async function ungroupedGroupId(workspaceId: number): Promise<number> {
 }
 
 // Ensure a tab↔workspace junction row exists (INSERT OR IGNORE).
+// When the junction already exists, update active + groupId so that
+// explicit group assignments through upsertTab are honoured.
 async function linkWorkspace(tabId: number, workspaceId: number, active: boolean, groupId: number) {
   if (workspaceId <= 0) return;
   const db = await getDb();
-  const idx = db.transaction("tabWorkspaces", "readwrite").store.index("tabWorkspace");
+  const tx = db.transaction("tabWorkspaces", "readwrite");
+  const idx = tx.store.index("tabWorkspace");
   const existing = await idx.get([tabId, workspaceId]);
-  if (existing) return; // DO NOTHING on conflict
+  if (existing) {
+    // Update active + group on existing junction (was previously a no-op).
+    if (existing.active !== (active ? 1 : 0) || existing.groupId !== groupId) {
+      existing.active = active ? 1 : 0;
+      existing.groupId = groupId;
+      await tx.store.put(existing);
+    }
+    await tx.done;
+    return;
+  }
+  await tx.done;
   await db.add("tabWorkspaces", {
     tabId, workspaceId, active: active ? 1 : 0, groupId, addedAt: now(),
   });
@@ -67,17 +80,28 @@ export async function upsertTab(tab: {
   // Don't eagerly create/assign Ungrouped — let auto-group rules run first.
   // Ungrouped is only created as a fallback when no domain rule matches.
 
-  // Snapshot: create independent row with auto-group by domain rules.
+  // Snapshot: create independent row.  When an explicit group_id is
+  // provided (drag-to-group from TabPicker) use it directly; otherwise
+  // run auto-group rules then fall back to Ungrouped.
   if (tab.snapshot) {
+    const explicitGroup = (tab.group_id ?? 0) > 0 ? tab.group_id! : 0;
+
     // Check for existing URL in this workspace first.
     const twRows = (await db.getAll("tabWorkspaces")).filter((r: TabWorkspaceRow) => r.workspaceId === tab.workspace_id);
     for (const twRow of twRows) {
       if (!twRow.tabId) continue;
       const existingTab = await db.get("tabs", twRow.tabId);
       if (existingTab && existingTab.urlHash === urlHash) {
-        // URL already pinned — return existing, don't duplicate.
-        const tw = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [existingTab.id!, tab.workspace_id]);
-        return toApi(existingTab, tw);
+        // URL already pinned — update group if an explicit group was requested.
+        if (explicitGroup > 0) {
+          const tw = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [existingTab.id!, tab.workspace_id]);
+          if (tw && tw.groupId !== explicitGroup) {
+            tw.groupId = explicitGroup;
+            await db.put("tabWorkspaces", tw);
+          }
+        }
+        const tw2 = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [existingTab.id!, tab.workspace_id]);
+        return toApi(existingTab, tw2);
       }
     }
 
@@ -90,20 +114,25 @@ export async function upsertTab(tab: {
     row.chromeTabId = -(id as number);
     await db.put("tabs", row);
 
-    // Link with group_id=0 so auto-group can match it.
-    await linkWorkspace(id as number, tab.workspace_id, active, 0);
+    if (explicitGroup > 0) {
+      // User explicitly targeted a group — link directly, skip auto-group.
+      await linkWorkspace(id as number, tab.workspace_id, active, explicitGroup);
+    } else {
+      // Link with group_id=0 so auto-group can match it.
+      await linkWorkspace(id as number, tab.workspace_id, active, 0);
 
-    // Auto-group by domain rules.
-    const { autoGroupTab } = await import("./autogroup-repo");
-    await autoGroupTab(id as number, tab.workspace_id, urlHash);
+      // Auto-group by domain rules.
+      const { autoGroupTab } = await import("./autogroup-repo");
+      await autoGroupTab(id as number, tab.workspace_id, urlHash);
 
-    // Fallback: if still ungrouped, assign to Ungrouped group.
-    const tw = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [id as number, tab.workspace_id]);
-    if (tw && tw.groupId === 0) {
-      const ugId = await ungroupedGroupId(tab.workspace_id);
-      if (ugId > 0) {
-        tw.groupId = ugId;
-        await db.put("tabWorkspaces", tw);
+      // Fallback: if still ungrouped, assign to Ungrouped group.
+      const tw = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [id as number, tab.workspace_id]);
+      if (tw && tw.groupId === 0) {
+        const ugId = await ungroupedGroupId(tab.workspace_id);
+        if (ugId > 0) {
+          tw.groupId = ugId;
+          await db.put("tabWorkspaces", tw);
+        }
       }
     }
 
@@ -136,8 +165,13 @@ export async function upsertTab(tab: {
     if (!twRow.tabId) continue;
     const t = await db.get("tabs", twRow.tabId);
     if (t && t.urlHash === urlHash) {
-      t.windowId = tab.window_id;
-      t.chromeTabId = tab.chrome_tab_id;
+      // Update windowId / chromeTabId only when safe — the windowChrome
+      // index is unique and a different row may already hold this pair.
+      const conflict = await db.getFromIndex("tabs", "windowChrome", [tab.window_id, tab.chrome_tab_id]);
+      if (!conflict || conflict.id === t.id) {
+        t.windowId = tab.window_id;
+        t.chromeTabId = tab.chrome_tab_id;
+      }
       t.title = tab.title;
       t.updatedAt = now();
       await db.put("tabs", t);
@@ -147,17 +181,20 @@ export async function upsertTab(tab: {
     }
   }
 
-  // New tab — link with group_id=0 first so auto-group can match it.
+  // New tab — link with explicit group if provided, else auto-group.
+  const explicitGroup = (tab.group_id ?? 0) > 0 ? tab.group_id! : 0;
   const id = await db.put("tabs", {
     windowId: tab.window_id, chromeTabId: tab.chrome_tab_id,
     title: tab.title, url: tab.url, urlHash,
     createdAt: now(), updatedAt: now(),
   });
-  await linkWorkspace(id as number, tab.workspace_id, active, 0);
+  await linkWorkspace(id as number, tab.workspace_id, active, explicitGroup > 0 ? explicitGroup : 0);
 
-  // Auto-group: checks tabs with group_id=0 and applies domain rules.
-  const { autoGroupTab } = await import("./autogroup-repo");
-  await autoGroupTab(id as number, tab.workspace_id, urlHash);
+  if (explicitGroup <= 0) {
+    // Auto-group: checks tabs with group_id=0 and applies domain rules.
+    const { autoGroupTab } = await import("./autogroup-repo");
+    await autoGroupTab(id as number, tab.workspace_id, urlHash);
+  }
 
   // Fallback: if still ungrouped after auto-group, assign to the Ungrouped group.
   const tw = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [id as number, tab.workspace_id]);
@@ -224,13 +261,30 @@ export async function findDuplicate(url: string): Promise<{
   const db = await getDb();
   const urlHash = hashUrl(url);
   const all = await db.getAll("tabs");
-  // Find by urlHash, not matching self by full URL
+
+  // Load similarity rules for a more precise per-domain match.
+  let simRules: SimilarityRule[] = [];
+  try { simRules = await loadSimilarityRules(); } catch { /* use default */ }
+  const ruleHash = simRules.length > 0 ? hashUrlWithRules(url, simRules) : urlHash;
+
+  // Find by urlHash (aggressive) or rule-aware hash.
+  // Live tabs (chromeTabId > 0) take priority; snapshots are never
+  // returned as duplicates so we don't switch away from a real tab.
   for (const t of all) {
-    if (t.urlHash === urlHash && t.chromeTabId > 0) {
-      return {
-        duplicate: true,
-        tab: { chrome_tab_id: t.chromeTabId, window_id: t.windowId, title: t.title },
-      };
+    if (t.chromeTabId > 0) {
+      const matchesDefault = t.urlHash === urlHash;
+      const matchesRule = simRules.length > 0 && t.urlHash === ruleHash;
+      if (matchesDefault || matchesRule) {
+        // Also check with rule-aware comparison of the stored tab's own URL
+        if (simRules.length > 0) {
+          const tRuleHash = hashUrlWithRules(t.url, simRules);
+          if (tRuleHash !== ruleHash) continue;
+        }
+        return {
+          duplicate: true,
+          tab: { chrome_tab_id: t.chromeTabId, window_id: t.windowId, title: t.title },
+        };
+      }
     }
   }
   return { duplicate: false, tab: null };

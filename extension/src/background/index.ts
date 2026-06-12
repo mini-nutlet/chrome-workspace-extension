@@ -3,6 +3,8 @@
 
 import * as api from "../lib/api";
 import { syncActiveToAllWorkspaces } from "../db/tab-repo";
+import { CURRENT_WS_NAME } from "../db/workspace-repo";
+import { loadSimilarityRules, type SimilarityRule } from "../db/database";
 
 const NEWTAB_URL = "chrome://newtab/";
 
@@ -30,17 +32,23 @@ async function ensureCurrentWorkspace(): Promise<number> {
   if (currentWsPromise) return currentWsPromise;
   currentWsPromise = (async () => {
     const list = await api.listWorkspaces();
-    const cur = list.find((w) => w.name === "Current");
+    const cur = list.find((w) => w.name === CURRENT_WS_NAME);
     if (cur) return cur.id;
-    const created = await api.createWorkspace("Current", "Auto-tracked tabs", "");
+    const created = await api.createWorkspace(CURRENT_WS_NAME, "Auto-tracked tabs", "");
     // If somehow multiple "Current" workspaces were already created, keep only the first.
     const all = await api.listWorkspaces();
-    const dupes = all.filter((w) => w.name === "Current");
+    const dupes = all.filter((w) => w.name === CURRENT_WS_NAME);
     for (let i = 1; i < dupes.length; i++) {
       try { await api.deleteWorkspace(dupes[i].id); } catch {}
     }
     return dupes[0]?.id ?? created.id;
-  })();
+  })().catch((e) => {
+    // Reset on failure so the next call retries instead of returning
+    // a permanently-rejected promise.
+    console.warn("[workspace-bg] ensureCurrentWorkspace failed, will retry:", e);
+    currentWsPromise = null;
+    throw e;
+  });
   return currentWsPromise;
 }
 
@@ -76,14 +84,43 @@ interface PendingDupe {
 }
 const pendingDupes = new Map<string, PendingDupe>();
 
+/** Return the best-matching similarity rule for a URL, or null. */
+function matchSimRule(url: string, rules: SimilarityRule[]): SimilarityRule | null {
+  try {
+    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+    for (const r of rules) {
+      if (!r.enabled) continue;
+      if (hostname.includes(r.domain_pattern.toLowerCase())) return r;
+    }
+  } catch { /* URL parse error — no rule can match */ }
+  return null;
+}
+
 async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> {
   if (!isNavigable(tab.url) || tab.id == null) return false;
+
+  // Skip duplicate check for URLs suppressed by batch operations
+  // (openAllTabs, restoreSession).
+  const tabNorm = api.normalizeUrlAggressive(tab.url!);
+  if (suppressedDupeUrls.has(tabNorm)) return false;
 
   const data = await api.findDuplicate(tab.url!);
   if (!data || !data.duplicate || !data.tab) return false;
   if (data.tab.chrome_tab_id === tab.id && data.tab.window_id === tab.windowId) return false;
 
   try { await chrome.tabs.get(data.tab.chrome_tab_id); } catch { return false; }
+
+  // ── Similarity rule: auto-switch without notification ─────────────
+  let simRules: SimilarityRule[] = [];
+  try { simRules = await loadSimilarityRules(); } catch { /* use default */ }
+  const matchedRule = matchSimRule(tab.url!, simRules);
+  if (matchedRule && matchedRule.auto_switch) {
+    // Auto-switch: close the new tab, focus the existing one.
+    chrome.tabs.remove(tab.id).catch(() => {});
+    chrome.windows.update(data.tab.window_id, { focused: true }).catch(() => {});
+    chrome.tabs.update(data.tab.chrome_tab_id, { active: true }).catch(() => {});
+    return true; // switched — caller skips syncTab
+  }
 
   const notifId = `dup-${tab.id}-${Date.now()}`;
   pendingDupes.set(notifId, {
@@ -113,6 +150,40 @@ function resolveDupe(notifId: string, switchToExisting: boolean) {
     chrome.tabs.update(info.existingTabId, { active: true }).catch(() => {});
   }
 }
+
+// ── Notification handlers ──────────────────────────────────────────
+
+// ── Dupe suppression for batch operations ─────────────────────────────
+// openAllTabs / restoreSession create many tabs; suppress duplicate
+// notifications for URLs that were just opened intentionally.
+
+const suppressedDupeUrls = new Set<string>();
+
+function suppressDupesForUrls(urls: string[], durationMs = 8000) {
+  for (const u of urls) {
+    try { suppressedDupeUrls.add(api.normalizeUrlAggressive(u)); } catch { suppressedDupeUrls.add(u.toLowerCase()); }
+  }
+  setTimeout(() => {
+    for (const u of urls) {
+      try { suppressedDupeUrls.delete(api.normalizeUrlAggressive(u)); } catch { suppressedDupeUrls.delete(u.toLowerCase()); }
+    }
+  }, durationMs);
+}
+
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "suppress-dupes" && Array.isArray(msg.urls)) {
+    suppressDupesForUrls(msg.urls, msg.durationMs ?? 8000);
+  }
+  if (msg.type === "reapply-auto-group") {
+    (async () => {
+      const curId = await ensureCurrentWorkspace();
+      if (curId > 0) {
+        await api.reapplyAutoGroup(curId);
+        notifyTabsChanged();
+      }
+    })().catch(() => {});
+  }
+});
 
 // ── Notification handlers ──────────────────────────────────────────
 
@@ -153,6 +224,13 @@ async function enforceSingleNewTab(newTabId: number | undefined): Promise<void> 
 
 // ── Event Listeners ────────────────────────────────────────────────
 
+/** Wrapper: sync a tab + notify the UI.  Silently catches individual
+ *  tab errors so one broken tab doesn't block the rest of the pipeline. */
+async function safeSyncAndNotify(tab: chrome.tabs.Tab): Promise<void> {
+  try { await syncTab(tab); } catch (e) { console.warn("[workspace-bg] syncTab failed:", e); }
+  try { notifyTabsChanged(); } catch {}
+}
+
 chrome.tabs.onCreated.addListener((tab) => {
   if (isNewTab(tab.pendingUrl) || isNewTab(tab.url)) {
     enforceSingleNewTab(tab.id);
@@ -160,34 +238,34 @@ chrome.tabs.onCreated.addListener((tab) => {
   }
   if (isNavigable(tab.url)) {
     handleDuplicateAndSwitch(tab).then((switched) => {
-      if (!switched) { syncTab(tab); notifyTabsChanged(); }
-    });
+      if (!switched) safeSyncAndNotify(tab);
+    }).catch(() => {}); // prevent unhandled-rejection
   }
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
-  if (changeInfo.url && isNewTab(changeInfo.url)) {
-    enforceSingleNewTab(tabId);
-    return;
-  }
-  if (changeInfo.url && isNavigable(changeInfo.url)) {
-    const switched = await handleDuplicateAndSwitch(tab);
-    if (switched) return;
-    if (isNewTab(tab.url) || tab.url === "" || tab.url === NEWTAB_URL) {
-      try { await chrome.tabs.remove(tabId!); } catch {}
-      await chrome.tabs.create({ url: changeInfo.url });
+  try {
+    if (changeInfo.url && isNewTab(changeInfo.url)) {
+      enforceSingleNewTab(tabId);
       return;
     }
-    if (tab) { await syncTab({ ...tab, url: changeInfo.url }); notifyTabsChanged(); }
-  }
-  if ((changeInfo.title || tab?.status === "complete") && isNavigable(tab?.url)) {
-    await syncTab(tab!); notifyTabsChanged();
-  }
+    if (changeInfo.url && isNavigable(changeInfo.url)) {
+      const tabWithUrl = { ...tab, url: changeInfo.url };
+      const switched = await handleDuplicateAndSwitch(tabWithUrl);
+      if (switched) return;
+      await safeSyncAndNotify(tabWithUrl);
+    }
+    if ((changeInfo.title || tab?.status === "complete") && isNavigable(tab?.url)) {
+      await safeSyncAndNotify(tab!);
+    }
+  } catch (e) { console.warn("[workspace-bg] onUpdated error:", e); }
 });
 
 chrome.tabs.onRemoved.addListener(async (tabId, { windowId }) => {
-  await removeTab(windowId, tabId);
-  notifyTabsChanged();
+  try {
+    await removeTab(windowId, tabId);
+    notifyTabsChanged();
+  } catch (e) { console.warn("[workspace-bg] onRemoved error:", e); }
 });
 
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
@@ -200,7 +278,7 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 });
 
 chrome.tabs.onAttached.addListener(async (tabId) => {
-  try { const tab = await chrome.tabs.get(tabId); await syncTab(tab); notifyTabsChanged(); } catch {}
+  try { const tab = await chrome.tabs.get(tabId); await safeSyncAndNotify(tab); } catch {}
 });
 
 chrome.tabs.onDetached.addListener(() => { notifyTabsChanged(); });
@@ -213,37 +291,89 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
-// ── Keep-alive ─────────────────────────────────────────────────────
+// ── Keyboard Commands ───────────────────────────────────────────────
 
-chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
+chrome.commands.onCommand.addListener((command) => {
+  if (command === "quick-search") {
+    // Focus the search bar in the side panel or newtab page.
+    chrome.runtime.sendMessage({ type: "focus-search" }).catch(() => {});
+  }
+});
 
-// ── Startup ────────────────────────────────────────────────────────
+// ── Periodic full sync + stale cleanup ─────────────────────────────
+// The event-based sync (onCreated/onUpdated/onRemoved) covers normal
+// operation, but a periodic sweep catches tabs that changed while the
+// service worker was asleep and cleans up DB entries whose browser
+// tabs have been closed by external means.
 
-let startupSyncRunning = false;
+let periodicSyncRunning = false;
 
-async function syncAllOpenTabs(workspaceId: number): Promise<void> {
-  if (startupSyncRunning) return;
-  startupSyncRunning = true;
+async function periodicFullSync(): Promise<void> {
+  if (periodicSyncRunning) return;
+  periodicSyncRunning = true;
   try {
-    const tabs = await chrome.tabs.query({});
-    let count = 0;
-    for (const tab of tabs) {
+    const curId = await ensureCurrentWorkspace();
+    const browserTabs = await chrome.tabs.query({});
+    let synced = 0;
+
+    // ── Sync all open browser tabs into Current workspace ────────────
+    for (const tab of browserTabs) {
       if (!isNavigable(tab.url)) continue;
       try {
         await api.upsertTab({
           window_id: tab.windowId, chrome_tab_id: tab.id,
-          workspace_id: workspaceId, title: tab.title ?? "",
+          workspace_id: curId, title: tab.title ?? "",
           url: tab.url!, active: tab.active,
         });
-        count++;
-      } catch { /* skip individual tab errors */ }
+        synced++;
+      } catch { /* skip individual errors */ }
     }
-    console.log(`[workspace-bg] Synced ${count} tabs to Current workspace`);
-    notifyTabsChanged();
-  } finally {
-    startupSyncRunning = false;
-  }
+
+    // ── Clean up stale DB entries ───────────────────────────────────
+    // Tabs whose chrome_tab_id no longer exists in any browser window
+    // are marked inactive.  We keep the row (other workspaces may
+    // still reference it), but the Current workspace shows them closed.
+    const liveIds = new Set(
+      browserTabs.map((t) => t.id).filter((id): id is number => id != null)
+    );
+    const allDbTabs = await api.listTabs(curId);
+    let cleaned = 0;
+    for (const dbTab of allDbTabs) {
+      if (dbTab.chrome_tab_id > 0 && !liveIds.has(dbTab.chrome_tab_id)) {
+        try {
+          await api.removeTab(dbTab.window_id, dbTab.chrome_tab_id, curId);
+          cleaned++;
+        } catch { /* skip */ }
+      }
+    }
+
+    // Re-apply auto-group rules so that rule changes are reflected
+    // within one sync cycle even if the settings page didn't notify us.
+    try { await api.reapplyAutoGroup(curId); } catch { /* best-effort */ }
+
+    if (synced > 0 || cleaned > 0) {
+      console.log(`[workspace-bg] Periodic sync: ${synced} synced, ${cleaned} cleaned`);
+      notifyTabsChanged();
+    }
+  } catch { /* non-critical — event sync is the primary path */ }
+  finally { periodicSyncRunning = false; }
 }
+
+chrome.alarms.create("full-sync", { periodInMinutes: 0.5 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "full-sync") periodicFullSync();
+});
+
+// ── Storage listener ───────────────────────────────────────────────
+
+// Invalidate the similarity-rules cache when the settings page updates it.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.similarityRules) {
+    import("../db/database").then(({ invalidateSimRulesCache }) => invalidateSimRulesCache());
+  }
+});
+
+// ── Startup ────────────────────────────────────────────────────────
 
 async function onStartupOrInstall() {
   try {
@@ -253,7 +383,9 @@ async function onStartupOrInstall() {
         chrome.storage.local.get("currentWorkspaceId", (r) => resolve((r.currentWorkspaceId as number) || 0));
       });
       if (stored <= 0) chrome.storage.local.set({ currentWorkspaceId: curId });
-      await syncAllOpenTabs(curId);
+      // Full sync captures all open tabs AND cleans up stale entries
+      // left over from a previous session.
+      await periodicFullSync();
     }
   } catch (e) { console.warn("[workspace-bg] startup error:", e); }
 }

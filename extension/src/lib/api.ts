@@ -5,11 +5,11 @@
 import type { Workspace, Tab, TabGroup, TabGroupTree, AutoGroupRule, SearchResult, DuplicateCheck, Session } from "./types";
 
 import { listWorkspaces as dbListWs, createWorkspace as dbCreateWs, updateWorkspace, deleteWorkspace as dbDeleteWs, reorderWorkspaces as dbReorderWs } from "../db/workspace-repo";
-import { upsertTab as dbUpsertTab, removeTab as dbRemoveTab, findDuplicate as dbFindDup, setTabGroup as dbSetGroup, syncActiveByUrl as dbSyncActiveByUrl, syncActiveToAllWorkspaces, updateTabWindow as dbUpdateTabWindow } from "../db/tab-repo";
+import { upsertTab as dbUpsertTab, removeTab as dbRemoveTab, listTabsByWorkspace as dbListTabsByWs, findDuplicate as dbFindDup, setTabGroup as dbSetGroup, syncActiveByUrl as dbSyncActiveByUrl, syncActiveToAllWorkspaces, updateTabWindow as dbUpdateTabWindow } from "../db/tab-repo";
 import { listGroups, createTabGroup as dbCreateGroup, updateTabGroup as dbUpdateGroup, deleteTabGroup as dbDeleteGroup, reorderGroups as dbReorderGroups, getTabGroupTree as dbGetTree } from "../db/tabgroup-repo";
 import { listBookmarks as dbListBm, createBookmark as dbCreateBm, deleteBookmark as dbDeleteBm } from "../db/bookmark-repo";
 import { saveSession as dbSaveSession, restoreSession as dbRestoreSession, deleteSession as dbDeleteSession } from "../db/session-repo";
-import { listRules, runAutoGroup as dbRunAutoGroup } from "../db/autogroup-repo";
+import { listRules, runAutoGroup as dbRunAutoGroup, reapplyAutoGroup as dbReapplyAutoGroup } from "../db/autogroup-repo";
 import { search as dbSearch } from "../db/search";
 import { getDb } from "../db/database";
 
@@ -24,8 +24,7 @@ export async function reorderWorkspaces(items: { id: number; parent_id: number; 
 // ── Tab ────────────────────────────────────────────────────────────
 
 export async function listTabs(workspaceId: number): Promise<Tab[]> {
-  const { listTabsByWorkspace } = await import("../db/tab-repo");
-  return listTabsByWorkspace(workspaceId);
+  return dbListTabsByWs(workspaceId);
 }
 
 export async function upsertTab(tab: Partial<Tab> & { url: string }): Promise<Tab> {
@@ -110,6 +109,7 @@ export async function updateAutoGroupRule(id: number, updates: Partial<Pick<Auto
 
 export async function deleteAutoGroupRule(id: number): Promise<void> { await (await getDb()).delete("autoGroupRules", id); }
 export async function runAutoGroup(): Promise<{ grouped_count: number }> { return { grouped_count: await dbRunAutoGroup() }; }
+export async function reapplyAutoGroup(workspaceId: number): Promise<{ grouped_count: number }> { return { grouped_count: await dbReapplyAutoGroup(workspaceId) }; }
 
 // ── Browser helpers ────────────────────────────────────────────────
 
@@ -141,8 +141,10 @@ export function normalizeUrlAggressive(u: string): string {
 
 export async function closeBrowserTabByUrl(url: string): Promise<boolean> {
   const allTabs = await chrome.tabs.query({});
-  const target = normalizeUrl(url);
-  const match = allTabs.find((t) => t.url && normalizeUrl(t.url) === target);
+  // Use aggressive normalisation so that query-param differences don't
+  // prevent closing (consistent with closeAllDuplicateTabs / DB dedup).
+  const target = normalizeUrlAggressive(url);
+  const match = allTabs.find((t) => t.url && normalizeUrlAggressive(t.url) === target);
   if (match && match.id != null) { await chrome.tabs.remove(match.id); return true; }
   return false;
 }

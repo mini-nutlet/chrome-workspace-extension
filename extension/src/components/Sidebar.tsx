@@ -135,12 +135,22 @@ export function Sidebar() {
     });
   };
 
+  const [renameError, setRenameError] = useState("");
+
   const handleCreate = async () => {
     if (!newName.trim()) return;
-    await createWorkspace(newName.trim(), "", createParentId);
-    setNewName("");
-    setShowCreate(false);
-    setCreateParentId(0);
+    try {
+      await createWorkspace(newName.trim(), "", createParentId);
+      setNewName("");
+      setShowCreate(false);
+      setCreateParentId(0);
+    } catch (e: any) {
+      // Likely a reserved name (e.g. "Current") — keep the form open
+      // so the user can try a different name.
+      setNewName("");
+      setShowCreate(false);
+      setCreateParentId(0);
+    }
   };
 
   const startCreate = (parentId = 0) => {
@@ -205,12 +215,19 @@ export function Sidebar() {
   const handleRenameSubmit = async () => {
     if (!renamingWs || !renameName.trim()) {
       setRenamingWs(null);
+      setRenameError("");
       return;
     }
-    await createWorkspace(renameName.trim(), "", renamingWs.parent_id);
-    await deleteWorkspace(renamingWs.id);
-    setRenamingWs(null);
-    setRenameName("");
+    try {
+      await createWorkspace(renameName.trim(), "", renamingWs.parent_id);
+      await deleteWorkspace(renamingWs.id);
+      setRenamingWs(null);
+      setRenameName("");
+      setRenameError("");
+    } catch (e: any) {
+      // Name is reserved or duplicate — keep rename form open, show error.
+      setRenameError(e?.message || "Cannot use this name");
+    }
   };
 
   // ── Drag-and-drop handlers (Opt 27) ─────────────────────────────────
@@ -308,7 +325,7 @@ export function Sidebar() {
           <input
             ref={searchRef}
             type="text"
-            placeholder="Search… (Ctrl+Shift+F)"
+            placeholder="Quick search… (Ctrl+Shift+F)"
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -361,9 +378,14 @@ export function Sidebar() {
               autoFocus
             />
             <button className="btn btn-accent btn-sm" onClick={handleRenameSubmit}>OK</button>
-            <button className="icon-btn" onClick={() => setRenamingWs(null)}>
+            <button className="icon-btn" onClick={() => { setRenamingWs(null); setRenameError(""); }}>
               <IconX size={14} />
             </button>
+            {renameError && (
+              <div style={{ width: "100%", fontSize: 11, color: "var(--danger)", marginTop: 2 }}>
+                {renameError}
+              </div>
+            )}
           </div>
         )}
 
