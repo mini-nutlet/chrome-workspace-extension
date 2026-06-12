@@ -36,8 +36,8 @@ export async function upsertTab(tab: Partial<Tab> & { url: string }): Promise<Ta
   });
 }
 
-export async function removeTab(windowId: number, chromeTabId: number, currentWorkspaceId?: number): Promise<void> {
-  return dbRemoveTab(windowId, chromeTabId, currentWorkspaceId ?? 0);
+export async function removeTab(windowId: number, chromeTabId: number, currentWorkspaceId?: number, tabDbId?: number): Promise<void> {
+  return dbRemoveTab(windowId, chromeTabId, currentWorkspaceId ?? 0, tabDbId);
 }
 
 export async function findDuplicate(url: string): Promise<DuplicateCheck> { return dbFindDup(url); }

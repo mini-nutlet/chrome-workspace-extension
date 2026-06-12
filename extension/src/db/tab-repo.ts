@@ -211,17 +211,31 @@ export async function upsertTab(tab: {
   return toApi(row, tw2);
 }
 
-export async function removeTab(windowId: number, chromeTabId: number, currentWsId: number): Promise<void> {
+export async function removeTab(windowId: number, chromeTabId: number, currentWsId: number, tabDbId?: number): Promise<void> {
   const db = await getDb();
+  let existing: TabRow | undefined;
 
   // Primary lookup: windowChrome index (matches live browser tabs).
-  let existing = await db.transaction("tabs").store.index("windowChrome").get([windowId, chromeTabId]);
+  if (windowId > 0 || chromeTabId > 0) {
+    const row = await db.transaction("tabs").store.index("windowChrome").get([windowId, chromeTabId]);
+    if (row) existing = row;
+  }
 
-  // Fallback: snapshot tabs store chrome_tab_id = -(tab_id).
-  // If the windowChrome index was changed by a prior multi-workspace
-  // removal, we can still find the row by its primary key.
+  // Fallback 1: snapshot tabs store chrome_tab_id = -(tab_id).
   if (!existing && windowId === 0 && chromeTabId < 0) {
     existing = await db.transaction("tabs").store.get(-chromeTabId);
+  }
+
+  // Fallback 2: direct primary-key lookup (handles snapshots with
+  // chrome_tab_id=0 that don't match any index entry).
+  if (!existing && tabDbId != null && tabDbId > 0) {
+    existing = await db.transaction("tabs").store.get(tabDbId);
+    // Verify: don't delete a live tab row by accident — only use
+    // the pk fallback when the index approach already failed and
+    // the stored row is indeed a snapshot.
+    if (existing && existing.chromeTabId > 0 && windowId === 0 && chromeTabId === 0) {
+      existing = undefined; // mismatch — refuse to delete live tab by snapshot coordinates
+    }
   }
 
   if (!existing) return;

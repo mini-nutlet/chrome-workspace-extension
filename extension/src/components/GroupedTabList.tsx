@@ -110,12 +110,12 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   // For the Current workspace, also removes tabs from the DB so the empty group
   // auto-deletes after the tree refreshes.
   const handleCloseAll = async (
-    tabs: { window_id: number; chrome_tab_id: number; url: string }[],
+    tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[],
   ) => {
     for (const tab of tabs) {
       await closeBrowserTabByUrl(tab.url);
       if (isCurrent) {
-        try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); } catch { /* ignore */ }
+        try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); } catch { /* ignore */ }
       }
     }
     await refreshTree();
@@ -126,7 +126,7 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   //   close all but one browser tab per URL.
   // In other workspaces, duplicates are snapshot DB entries — delete extras.
   const handleCloseDuplicates = async (
-    tabs: { window_id: number; chrome_tab_id: number; url: string }[],
+    tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[],
   ) => {
     let didClose = false;
 
@@ -172,7 +172,7 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
           if (tab.chrome_tab_id > 0) {
             try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
           }
-          try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); didClose = true; } catch {}
+          try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); didClose = true; } catch {}
         } else {
           seen.add(normalized);
         }

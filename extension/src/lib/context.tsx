@@ -693,7 +693,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (tab.chrome_tab_id > 0) {
             try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
           }
-          try { await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId); didClose = true; } catch {}
+          try { await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); didClose = true; } catch {}
         } else {
           seen.add(n);
         }

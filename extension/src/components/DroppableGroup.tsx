@@ -11,8 +11,8 @@ interface DroppableGroupProps {
   onUpdateGroup: (id: number, updates: Record<string, unknown>) => void;
   onDropTab: (tabId: number, groupId: number) => void;
   onDropExternal?: (data: { url: string; title: string; windowId: number; chromeTabId: number }, groupId: number) => void;
-  onCloseAll?: (tabs: { window_id: number; chrome_tab_id: number; url: string }[]) => void;
-  onCloseDuplicates?: (tabs: { window_id: number; chrome_tab_id: number; url: string }[]) => void;
+  onCloseAll?: (tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[]) => void;
+  onCloseDuplicates?: (tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[]) => void;
   isCurrent?: boolean;
 }
 
@@ -157,7 +157,7 @@ export function DroppableGroup({
               title="Close duplicate tabs in group"
               onClick={(e) => {
                 e.stopPropagation();
-                onCloseDuplicates?.(group.tabs.map((t) => ({ window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url })));
+                onCloseDuplicates?.(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url })));
               }}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>
@@ -167,7 +167,7 @@ export function DroppableGroup({
               title="Close all tabs in group"
               onClick={(e) => {
                 e.stopPropagation();
-                onCloseAll(group.tabs.map((t) => ({ window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url })));
+                onCloseAll(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url })));
               }}
             >
               <IconX size={12} />
