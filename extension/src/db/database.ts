@@ -2,20 +2,43 @@
 // Uses the `idb` library for a clean Promise-based API.
 import { openDB, type IDBPDatabase } from "idb";
 
-// ── Similarity rule types (mirrors lib/types.ts) ─────────────────────
-export type SimRuleType = "ignore_query" | "ignore_hash" | "ignore_path_query";
-
-export interface SimilarityRule {
-  id: string;
-  domain_pattern: string;
-  rule_type: SimRuleType;
-  enabled: boolean;
-  /** When true, a duplicate on this domain auto-switches. */
-  auto_switch: boolean;
-}
+// ── Similarity rule types (re-exported from lib/types.ts) ────────────
+export type { SimRuleType, SimilarityRule, SimPatternType } from "../lib/types";
+import type { SimilarityRule } from "../lib/types";
 
 let cachedSimRules: SimilarityRule[] | null = null;
 let simRulesLoadPromise: Promise<SimilarityRule[]> | null = null;
+
+let migrationDone = false;
+
+/** One-shot migration: convert legacy autoSwitchDomains to SimilarityRule entries. */
+async function migrateLegacyAutoSwitch(rules: SimilarityRule[]): Promise<SimilarityRule[]> {
+  if (migrationDone) return rules;
+  migrationDone = true;
+  try {
+    const stored = await chrome.storage.local.get("autoSwitchDomains");
+    const domains = (stored.autoSwitchDomains as string[]) || [];
+    if (domains.length === 0) return rules;
+    const existingPatterns = new Set(
+      rules.map((r) => `${r.pattern}|${r.pattern_type}`),
+    );
+    for (const domain of domains) {
+      if (!domain) continue;
+      const key = `${domain}|domain`;
+      if (existingPatterns.has(key)) continue; // avoid duplicates
+      rules.push({
+        id: crypto.randomUUID(),
+        pattern: domain,
+        pattern_type: "domain",
+        rule_type: "ignore_query",
+        enabled: true,
+        auto_switch: true,
+      });
+    }
+    await chrome.storage.local.remove("autoSwitchDomains");
+  } catch { /* non-critical */ }
+  return rules;
+}
 
 /** Load similarity rules from chrome.storage.local, with in-memory cache. */
 export async function loadSimilarityRules(): Promise<SimilarityRule[]> {
@@ -24,9 +47,23 @@ export async function loadSimilarityRules(): Promise<SimilarityRule[]> {
   simRulesLoadPromise = (async () => {
     try {
       const result = await chrome.storage.local.get("similarityRules");
-      const raw = (result.similarityRules as SimilarityRule[]) || [];
-      // Normalise: old rules may lack auto_switch.
-      cachedSimRules = raw.map((r) => ({ ...r, auto_switch: r.auto_switch ?? false }));
+      const raw = (result.similarityRules as any[]) || [];
+      // Normalise: old rules may lack auto_switch, pattern_type, or have domain_pattern.
+      cachedSimRules = raw.map((r: any) => ({
+        id: r.id ?? crypto.randomUUID(),
+        pattern: r.pattern ?? r.domain_pattern ?? "",
+        pattern_type: r.pattern_type ?? "domain",
+        rule_type: r.rule_type ?? "ignore_query",
+        enabled: r.enabled !== false,
+        auto_switch: r.auto_switch ?? false,
+      }));
+      // Persist normalised rules back so next read is clean.
+      await chrome.storage.local.set({ similarityRules: cachedSimRules });
+      // Migrate legacy autoSwitchDomains → SimilarityRule entries.
+      cachedSimRules = await migrateLegacyAutoSwitch(cachedSimRules);
+      if (cachedSimRules.length > 0) {
+        await chrome.storage.local.set({ similarityRules: cachedSimRules });
+      }
     } catch {
       cachedSimRules = [];
     }
@@ -173,6 +210,59 @@ export function now(): string {
 }
 
 /**
+ * Match a URL against a single SimilarityRule.
+ * Supports domain, exact-path, and path-prefix matching.
+ */
+export function matchRule(url: string, rule: SimilarityRule): boolean {
+  try {
+    const u = new URL(url);
+    const hostname = u.hostname.replace(/^www\./, "").toLowerCase();
+    const pathname = u.pathname.toLowerCase();
+
+    // Parse pattern into hostname and optional path parts.
+    const slashIdx = rule.pattern.indexOf("/");
+    const patHost = slashIdx === -1
+      ? rule.pattern.toLowerCase()
+      : rule.pattern.slice(0, slashIdx).toLowerCase();
+    const patPath = slashIdx === -1 ? "" : rule.pattern.slice(slashIdx).toLowerCase();
+
+    // Hostname match (substring — preserves existing behaviour).
+    if (!hostname.includes(patHost.replace(/^www\./, ""))) return false;
+
+    // Path match for exact_path and path_prefix.
+    if (rule.pattern_type === "exact_path" || rule.pattern_type === "path_prefix") {
+      if (!patPath) return true; // no path in pattern → fall back to domain-only
+      // Normalise trailing slashes.
+      const normPath = pathname.replace(/\/+$/, "") || "/";
+      const normPat = patPath.replace(/\/+$/, "") || "/";
+      if (rule.pattern_type === "exact_path") {
+        return normPath === normPat;
+      }
+      // path_prefix: "/settings" matches "/settings/profile" but not "/settingsX"
+      if (normPath === normPat) return true;
+      return normPath.startsWith(normPat + "/");
+    }
+
+    // domain mode — hostname match was sufficient.
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Find the first enabled SimilarityRule matching the given URL.
+ * Returns null if no rule matches.
+ */
+export function findRule(url: string, rules: SimilarityRule[]): SimilarityRule | null {
+  for (const r of rules) {
+    if (!r.enabled) continue;
+    if (matchRule(url, r)) return r;
+  }
+  return null;
+}
+
+/**
  * Default aggressive hash — strips query + hash + www, lowercases.
  * Used when no cached similarity rules are available (synchronous path).
  */
@@ -197,15 +287,8 @@ export function hashUrlWithRules(url: string, simRules: SimilarityRule[]): strin
     const u = new URL(url);
     const hostname = u.hostname.replace(/^www\./, "");
 
-    // Find the best-matching rule for this domain.
-    let matchedRule: SimilarityRule | null = null;
-    for (const rule of simRules) {
-      if (!rule.enabled) continue;
-      if (hostname.includes(rule.domain_pattern)) {
-        matchedRule = rule;
-        break; // first match wins (rules are sorted by priority)
-      }
-    }
+    // Find the best-matching rule using enhanced pattern matching.
+    const matchedRule = findRule(url, simRules);
 
     if (matchedRule) {
       switch (matchedRule.rule_type) {

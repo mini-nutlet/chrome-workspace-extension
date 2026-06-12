@@ -88,12 +88,16 @@ export interface Session {
   saved_at: string | null;
 }
 
+export type SimPatternType = "domain" | "exact_path" | "path_prefix";
+
 export interface SimilarityRule {
   id: string;
-  domain_pattern: string;
+  /** URL pattern: "github.com" | "github.com/settings" | "github.com/settings/" */
+  pattern: string;
+  pattern_type: SimPatternType;
   rule_type: SimRuleType;
   enabled: boolean;
-  /** When true, a duplicate on this domain auto-switches to the existing
+  /** When true, a duplicate matching this rule auto-switches to the existing
    *  tab instead of showing a notification prompt. */
   auto_switch: boolean;
 }

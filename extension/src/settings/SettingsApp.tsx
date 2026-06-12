@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import type { AutoGroupRule, SimilarityRule, SimRuleType } from "../lib/types";
+import type { AutoGroupRule, SimilarityRule, SimRuleType, SimPatternType } from "../lib/types";
 import type { Theme } from "../lib/context";
 import * as api from "../lib/api";
 import { IconPlus, IconEdit, IconTrash, IconMonitor, IconSun, IconMoon, IconSettings } from "../components/Icons";
@@ -15,7 +15,8 @@ const RULE_TYPE_LABELS: Record<SimRuleType, string> = {
 function newSimRule(): SimilarityRule {
   return {
     id: crypto.randomUUID(),
-    domain_pattern: "",
+    pattern: "",
+    pattern_type: "domain",
     rule_type: "ignore_query",
     enabled: true,
     auto_switch: false,
@@ -31,7 +32,7 @@ export function SettingsApp() {
   const [editDomain, setEditDomain] = useState("");
   const [editGroup, setEditGroup] = useState("");
 
-  // Similarity rules (Opt 24)
+  // Unified Single-Instance rules (URL/domain-level duplicate prevention).
   const [simRules, setSimRules] = useState<SimilarityRule[]>([]);
 
   useEffect(() => {
@@ -40,7 +41,16 @@ export function SettingsApp() {
       setTheme((r.theme as Theme) || "system");
     });
     chrome.storage.local.get("similarityRules", (r) => {
-      setSimRules((r.similarityRules as SimilarityRule[]) || []);
+      const loaded = (r.similarityRules as any[]) || [];
+      // Normalise: map old domain_pattern → pattern, add defaults.
+      setSimRules(loaded.map((item: any) => ({
+        id: item.id ?? crypto.randomUUID(),
+        pattern: item.pattern ?? item.domain_pattern ?? "",
+        pattern_type: item.pattern_type ?? "domain",
+        rule_type: item.rule_type ?? "ignore_query",
+        enabled: item.enabled !== false,
+        auto_switch: item.auto_switch ?? false,
+      })));
     });
   }, []);
 
@@ -122,23 +132,24 @@ export function SettingsApp() {
         </div>
       </section>
 
-      {/* Similarity Rules (Opt 24) */}
+      {/* Single-Instance Rules — unified duplicate prevention */}
       <section style={{ marginBottom: 32 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--text-secondary)" }}>Similarity Rules</h2>
+          <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--text-secondary)" }}>⚡ Single-Instance Rules</h2>
           <button className="btn btn-sm" onClick={() => saveSimRules([...simRules, newSimRule()])}>
             <IconPlus size={12} /> Add
           </button>
         </div>
         <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 10 }}>
-          Custom rules override the default URL-hash duplicate detection. Matched by domain.<br />
-          <strong>⚡ Auto-switch</strong>: when a duplicate is detected, immediately switch to the
-          existing tab without showing a notification.
+          When you open a URL matching one of these rules, the extension treats it as a duplicate.
+          <br /><strong>⚡ Auto-switch</strong>: close the new tab and switch to existing silently.
+          <br /><strong>Pattern types</strong>: <em>Domain</em> (entire site), <em>Exact path</em> (specific page),
+          <em>Path prefix</em> (page and its sub-pages).
         </p>
         <div className="card" style={{ overflow: "hidden" }}>
           {simRules.length === 0 && (
             <div style={{ padding: "16px 12px", textAlign: "center", color: "var(--text-tertiary)", fontSize: 12 }}>
-              No custom rules. Default hash-based matching is used.
+              No rules configured. Add one below to enforce single-instance mode.
             </div>
           )}
           {simRules.map((rule, idx) => (
@@ -152,15 +163,29 @@ export function SettingsApp() {
               }}
             >
               <input
-                placeholder="Domain (e.g. github.com)"
-                value={rule.domain_pattern}
+                placeholder={rule.pattern_type === "domain" ? "Domain (github.com)" : "URL (github.com/settings)"}
+                value={rule.pattern}
                 onChange={(e) => {
                   const updated = [...simRules];
-                  updated[idx] = { ...updated[idx]!, domain_pattern: e.target.value };
+                  updated[idx] = { ...updated[idx]!, pattern: e.target.value };
                   saveSimRules(updated);
                 }}
                 style={{ flex: 1, fontSize: 12, padding: "4px 6px" }}
               />
+              <select
+                value={rule.pattern_type}
+                onChange={(e) => {
+                  const updated = [...simRules];
+                  updated[idx] = { ...updated[idx]!, pattern_type: e.target.value as SimPatternType };
+                  saveSimRules(updated);
+                }}
+                style={{ fontSize: 11, padding: "2px 2px", borderRadius: "var(--radius-xs)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+                title="Match scope"
+              >
+                <option value="domain">Domain</option>
+                <option value="exact_path">Exact path</option>
+                <option value="path_prefix">Path prefix</option>
+              </select>
               <select
                 value={rule.rule_type}
                 onChange={(e) => {
@@ -169,6 +194,7 @@ export function SettingsApp() {
                   saveSimRules(updated);
                 }}
                 style={{ fontSize: 11, padding: "4px 4px", borderRadius: "var(--radius-xs)", border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text)" }}
+                title="How to compare URLs"
               >
                 {Object.entries(RULE_TYPE_LABELS).map(([k, v]) => (
                   <option key={k} value={k}>{v}</option>

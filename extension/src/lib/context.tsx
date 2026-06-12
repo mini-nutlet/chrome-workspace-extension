@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
-import type { Workspace, Tab, TabGroupTree, AutoGroupRule, SearchResult } from "./types";
+import type { Workspace, Tab, TabGroupWithTabs, TabGroupTree, AutoGroupRule, SearchResult } from "./types";
 import * as api from "./api";
 
 export type Theme = "system" | "light" | "dark";
@@ -89,6 +89,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [tabPickerOpen, setTabPickerOpen] = useState(false);
   const [hasSession, setHasSession] = useState(false);
 
+  // Stable ref for workspaces so callbacks can check isCurrent without
+  // adding the full workspaces array as a dependency.
+  const workspacesRef = useRef(workspaces);
+  workspacesRef.current = workspaces;
+
+  // Generation counter for live-tree builds — lets us discard stale
+  // results when multiple builds are in flight (StrictMode double-fire,
+  // tabs-changed racing with initial load, etc.).
+  const liveTreeGen = useRef(0);
+
   // ── theme ──────────────────────────────────────────────────────────
   useEffect(() => {
     chrome.storage.local.get("theme", (r) => {
@@ -114,11 +124,165 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // ── live tree builder (Current workspace) ───────────────────────────
+  // Builds a TabGroupTree directly from live browser tabs, bypassing
+  // IndexedDB entirely.  This gives instant display on first load and
+  // real-time updates on every tab event without a DB round-trip.
+  //
+  // Group IDs are hashed from the group name so they are deterministic
+  // across rebuilds — prevents React key churn that causes visual flicker
+  // when StrictMode double-invokes effects or tabs-changed fires rapidly.
+
+  /** Simple string hash → negative ID for deterministic React keys. */
+  function hashGroupId(name: string): number {
+    let h = 0;
+    for (let i = 0; i < name.length; i++) {
+      h = ((h << 5) - h + name.charCodeAt(i)) | 0;
+    }
+    return -(Math.abs(h % 999_999) + 1);
+  }
+
+  const buildLiveTree = useCallback(async (): Promise<TabGroupTree> => {
+    const allTabs = await chrome.tabs.query({});
+
+    // Filter to navigable URLs only.
+    const navigable = allTabs.filter(
+      (t) => t.url && (t.url.startsWith("http://") || t.url.startsWith("https://")),
+    );
+
+    // Count URLs by aggressive-normalised key for open_count badge.
+    const urlCount = new Map<string, number>();
+    for (const t of navigable) {
+      if (t.url) {
+        const key = api.normalizeUrlAggressive(t.url);
+        urlCount.set(key, (urlCount.get(key) ?? 0) + 1);
+      }
+    }
+
+    // Deduplicate browser tabs by aggressive-normalised URL.
+    // Keep one entry per unique URL, preferring the active tab.
+    // open_count shows how many actual browser tabs share that URL.
+    const deduped = new Map<string, chrome.tabs.Tab>();
+    for (const t of navigable) {
+      if (!t.url) continue;
+      const key = api.normalizeUrlAggressive(t.url);
+      const existing = deduped.get(key);
+      if (!existing || (!existing.active && t.active)) {
+        deduped.set(key, t);
+      }
+    }
+
+    // Domain extraction helper.
+    const domainFromUrl = (url: string): string => {
+      try {
+        return new URL(url).hostname.replace(/^www\./, "").toLowerCase();
+      } catch {
+        return url.toLowerCase();
+      }
+    };
+
+    // Load auto-group rules directly to avoid state dependency cascade.
+    let rules: AutoGroupRule[] = [];
+    try {
+      rules = ensureArray(await api.listAutoGroupRules());
+    } catch { /* use empty rules — all tabs go to Ungrouped */ }
+
+    // Match a URL to an auto-group rule name, or null if no rule matches.
+    const getGroupName = (url: string): string | null => {
+      const domain = domainFromUrl(url);
+      for (const rule of rules) {
+        if (!rule.enabled) continue;
+        if (domain.includes(rule.domain_pattern.toLowerCase())) {
+          return rule.group_name;
+        }
+      }
+      return null;
+    };
+
+    // Build tabs and group them.
+    const groupMap = new Map<string, { name: string; tabs: Tab[] }>();
+    const ungroupedTabs: Tab[] = [];
+
+    for (const [normKey, t] of deduped) {
+      const tab: Tab = {
+        id: -(t.id ?? Date.now() + Math.random()),
+        window_id: t.windowId,
+        chrome_tab_id: t.id ?? 0,
+        workspace_id: currentWsId,
+        group_id: 0,
+        title: t.title ?? t.url ?? "",
+        url: t.url ?? "",
+        url_hash: normKey,
+        active: t.active,
+        is_open: true,
+        open_count: urlCount.get(normKey) ?? 1,
+        snapshot: false,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      const groupName = getGroupName(t.url ?? "");
+      if (groupName) {
+        if (!groupMap.has(groupName)) {
+          groupMap.set(groupName, { name: groupName, tabs: [] });
+        }
+        groupMap.get(groupName)!.tabs.push(tab);
+      } else {
+        ungroupedTabs.push(tab);
+      }
+    }
+
+    // Build TabGroupWithTabs from groupMap — sort by name for stable
+    // ordering across rebuilds so React keys never change spuriously.
+    const groups: TabGroupWithTabs[] = [];
+    const sortedNames = [...groupMap.keys()].sort((a, b) => a.localeCompare(b));
+    let sortOrder = 0;
+    for (const name of sortedNames) {
+      const entry = groupMap.get(name)!;
+      groups.push({
+        id: hashGroupId(name),
+        workspace_id: currentWsId,
+        name,
+        color: "",
+        collapsed: false,
+        sort_order: sortOrder++,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        tabs: entry.tabs,
+      });
+    }
+
+    return { groups, ungrouped_tabs: ungroupedTabs };
+  }, [currentWsId]);
+
   const refreshTree = useCallback(async () => {
     if (currentWsId <= 0) {
       setTree(EMPTY_TREE);
       return;
     }
+
+    // Fast path for the "Current" workspace: build the tree directly from
+    // live browser tabs instead of reading from IndexedDB.  This gives instant
+    // display on first load and real-time updates without a DB round-trip.
+    const ws = workspacesRef.current.find((w) => w.id === currentWsId);
+    if (ws?.name === "Current" && ws.parent_id === 0) {
+      const gen = ++liveTreeGen.current;
+      try {
+        const live = await buildLiveTree();
+        // Only apply if no newer build has started (handles StrictMode
+        // double-fire and rapid tabs-changed / initial-load races).
+        if (liveTreeGen.current === gen) {
+          setTree(live);
+        }
+      } catch {
+        if (liveTreeGen.current === gen) {
+          setTree(EMPTY_TREE);
+        }
+      }
+      return;
+    }
+
+    // Existing DB path for non-Current workspaces.
     try {
       const t = await api.getTabGroupTree(currentWsId);
       const tree = ensureTree(t);
@@ -186,7 +350,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch {
       setTree(EMPTY_TREE);
     }
-  }, [currentWsId]);
+  }, [currentWsId, buildLiveTree]);
 
   const refreshRules = useCallback(async () => {
     try {
@@ -224,32 +388,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [workspaces, currentWsId]);
 
   // ── data refresh (driven by currentWsId) ─────────────────────────
-  // On first load the background worker may still be syncing tabs into
-  // the DB.  Retry once after a short delay if the tree is empty.
-  const initialLoadDone = useRef(false);
+  // For the Current workspace the tree is built directly from live
+  // browser tabs (inside refreshTree), so no retry logic is needed.
   useEffect(() => {
     if (currentWsId <= 0) return;
-    const doRefresh = async () => {
-      await refreshTree();
-      if (!initialLoadDone.current) {
-        initialLoadDone.current = true;
-        // Re-check tree state after a moment — the service worker
-        // may still be running startup sync.
-        setTimeout(async () => {
-          // Only retry if tree came back empty the first time.
-          const t = await api.getTabGroupTree(currentWsId);
-          const tt = ensureTree(t);
-          const total = tt.groups.reduce((s, g) => s + g.tabs.length, 0) + tt.ungrouped_tabs.length;
-          if (total === 0) {
-            // Still empty — give the background one more cycle.
-            setTimeout(() => refreshTree(), 2000);
-          } else {
-            refreshTree(); // data arrived — show it
-          }
-        }, 1500);
-      }
-    };
-    doRefresh();
+    refreshTree();
   }, [currentWsId, refreshTree]);
 
   // ── visibility refresh ────────────────────────────────────────────
@@ -701,7 +844,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // Sync active status to backend immediately so refreshTree
           // doesn't fetch stale data before the background worker fires.
           try { await api.syncActiveByUrl(url); } catch { /* non-critical */ }
-          await refreshTree();
+          // For Current, skip DB refresh — markActive already updated
+          // the live tree; tabs-changed will fire from syncActiveByUrl.
+          const cw = workspacesRef.current.find((w) => w.id === currentWsId);
+          if (!cw || cw.name !== "Current" || cw.parent_id !== 0) {
+            await refreshTree();
+          }
           return;
         }
       } catch {
@@ -730,8 +878,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } catch { /* non-critical */ }
     }
     // Delay to let Chrome settle, then refresh to confirm state.
+    // For Current, skip DB refresh — the live tree rebuilds when
+    // tabs-changed fires from the background worker.
     await new Promise((r) => setTimeout(r, 200));
-    await refreshTree();
+    const cw2 = workspacesRef.current.find((w) => w.id === currentWsId);
+    if (!cw2 || cw2.name !== "Current" || cw2.parent_id !== 0) {
+      await refreshTree();
+    }
   }, [currentWsId, refreshTree]);
 
   const value: AppContextType = {

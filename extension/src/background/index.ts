@@ -4,7 +4,7 @@
 import * as api from "../lib/api";
 import { syncActiveToAllWorkspaces } from "../db/tab-repo";
 import { CURRENT_WS_NAME } from "../db/workspace-repo";
-import { loadSimilarityRules, type SimilarityRule } from "../db/database";
+import { loadSimilarityRules, findRule, type SimilarityRule } from "../db/database";
 
 const NEWTAB_URL = "chrome://newtab/";
 
@@ -84,18 +84,6 @@ interface PendingDupe {
 }
 const pendingDupes = new Map<string, PendingDupe>();
 
-/** Return the best-matching similarity rule for a URL, or null. */
-function matchSimRule(url: string, rules: SimilarityRule[]): SimilarityRule | null {
-  try {
-    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-    for (const r of rules) {
-      if (!r.enabled) continue;
-      if (hostname.includes(r.domain_pattern.toLowerCase())) return r;
-    }
-  } catch { /* URL parse error — no rule can match */ }
-  return null;
-}
-
 async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> {
   if (!isNavigable(tab.url) || tab.id == null) return false;
 
@@ -110,16 +98,32 @@ async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> 
 
   try { await chrome.tabs.get(data.tab.chrome_tab_id); } catch { return false; }
 
-  // ── Similarity rule: auto-switch without notification ─────────────
+  // ── Unified Single-Instance rules ────────────────────────────────
+  // Load similarity rules and check if any enabled rule matches this URL.
+  // If the matching rule has auto_switch enabled, silently switch to the
+  // existing tab.  Otherwise fall through to the notification prompt.
   let simRules: SimilarityRule[] = [];
   try { simRules = await loadSimilarityRules(); } catch { /* use default */ }
-  const matchedRule = matchSimRule(tab.url!, simRules);
+  const matchedRule = findRule(tab.url!, simRules);
   if (matchedRule && matchedRule.auto_switch) {
-    // Auto-switch: close the new tab, focus the existing one.
-    chrome.tabs.remove(tab.id).catch(() => {});
-    chrome.windows.update(data.tab.window_id, { focused: true }).catch(() => {});
-    chrome.tabs.update(data.tab.chrome_tab_id, { active: true }).catch(() => {});
-    return true; // switched — caller skips syncTab
+    // Try to close the new tab.  If the page requires a confirmation
+    // (e.g. beforeunload handler, form data) or the tab is otherwise
+    // unclosable, fall through to the notification so the user can
+    // decide how to handle it.
+    let closed = false;
+    try {
+      await chrome.tabs.remove(tab.id);
+      closed = true;
+    } catch {
+      // Tab may have a beforeunload handler, already be closed, or
+      // the extension lacks permission — don't pretend we succeeded.
+    }
+    if (closed) {
+      chrome.windows.update(data.tab.window_id, { focused: true }).catch(() => {});
+      chrome.tabs.update(data.tab.chrome_tab_id, { active: true }).catch(() => {});
+      return true; // switched — caller skips syncTab
+    }
+    // Close failed — fall through to notification prompt below.
   }
 
   const notifId = `dup-${tab.id}-${Date.now()}`;
@@ -140,14 +144,20 @@ async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> 
   return false;
 }
 
-function resolveDupe(notifId: string, switchToExisting: boolean) {
+async function resolveDupe(notifId: string, switchToExisting: boolean) {
   const info = pendingDupes.get(notifId);
   if (!info) return;
   pendingDupes.delete(notifId);
   if (switchToExisting) {
-    chrome.tabs.remove(info.newTabId).catch(() => {});
-    chrome.windows.update(info.existingWindowId, { focused: true }).catch(() => {});
-    chrome.tabs.update(info.existingTabId, { active: true }).catch(() => {});
+    // Await the remove — if it fails (beforeunload, already closed, etc.)
+    // don't switch away from the current tab.
+    try {
+      await chrome.tabs.remove(info.newTabId);
+      chrome.windows.update(info.existingWindowId, { focused: true }).catch(() => {});
+      chrome.tabs.update(info.existingTabId, { active: true }).catch(() => {});
+    } catch {
+      // Tab close failed — keep the user on the current (new) tab.
+    }
   }
 }
 
