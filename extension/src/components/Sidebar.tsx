@@ -1,7 +1,8 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useApp } from "../lib/context";
 import type { Workspace } from "../lib/types";
-import { IconSearch, IconPlus, IconX, IconChevronRight, IconTrash, IconHome, IconDots } from "./Icons";
+import { CURRENT_WS_NAME } from "../db/workspace-repo";
+import { IconSearch, IconPlus, IconX, IconChevronRight, IconTrash, IconHome, IconDots, IconMonitor } from "./Icons";
 import { ContextMenu, type MenuAction } from "./ContextMenu";
 
 // Deterministic color from workspace name for the avatar.
@@ -28,10 +29,10 @@ interface TreeNode {
 }
 
 function buildTree(workspaces: Workspace[]): TreeNode[] {
-  // Sort by sort_order, but "Current" always first.
+  // Sort by sort_order, but the auto-tracked workspace is always first.
   const sorted = [...workspaces].sort((a, b) => {
-    const aCurrent = a.name === "Current" && a.parent_id === 0;
-    const bCurrent = b.name === "Current" && b.parent_id === 0;
+    const aCurrent = a.name === CURRENT_WS_NAME && a.parent_id === 0;
+    const bCurrent = b.name === CURRENT_WS_NAME && b.parent_id === 0;
     if (aCurrent && !bCurrent) return -1;
     if (!aCurrent && bCurrent) return 1;
     return a.sort_order - b.sort_order;
@@ -145,7 +146,7 @@ export function Sidebar() {
       setShowCreate(false);
       setCreateParentId(0);
     } catch (e: any) {
-      // Likely a reserved name (e.g. "Current") — keep the form open
+      // Likely a reserved name — keep the form open
       // so the user can try a different name.
       setNewName("");
       setShowCreate(false);
@@ -175,7 +176,7 @@ export function Sidebar() {
   };
 
   // ── Context menu (Opt 16: triggered by ⋮ icon) ──────────────────────
-  const isCurrentWs = (ws: Workspace) => ws.name === "Current" && ws.parent_id === 0;
+  const isCurrentWs = (ws: Workspace) => ws.name === CURRENT_WS_NAME && ws.parent_id === 0;
 
   const openContextMenu = (e: React.MouseEvent, ws: Workspace) => {
     e.stopPropagation();
@@ -295,6 +296,11 @@ export function Sidebar() {
     return true;
   };
 
+  // Anchor for inline create form: show below selected workspace (or "Open Tabs" on dashboard)
+  const createFormAnchor = createParentId > 0
+    ? createParentId
+    : (currentWsId > 0 ? currentWsId : flatList[0]?.ws.id);
+
   return (
     <div className="sidebar">
       {/* Header — Home icon + Workspaces title + New button (Opt 17) */}
@@ -389,9 +395,95 @@ export function Sidebar() {
           </div>
         )}
 
-        {/* Create form — auto-indented for sub-workspaces (Opt 15) */}
-        {showCreate && (
-          <div className="ws-create-form" style={{ marginLeft: createParentId ? 24 : 4 }}>
+        {/* Workspace items */}
+        {flatList.map((item, idx) => {
+          if (!isVisible(item, idx)) return null;
+          const isTop = item.ws.parent_id === 0;
+
+          // Show create form after the anchor workspace:
+          // - sub-workspace → after its parent (createParentId)
+          // - top-level    → after the currently selected workspace
+          const showCreateHere = showCreate && item.ws.id === createFormAnchor;
+
+          return (
+            <Fragment key={item.ws.id}>
+              <div>
+              <div
+                className={`ws-item${currentWsId === item.ws.id ? " selected" : ""}${isTop ? " ws-item-top" : ""}${isCurrentWs(item.ws) ? " ws-item-live" : ""}${dragOverWs?.id === item.ws.id ? " drag-over" : ""}${dragWs?.id === item.ws.id ? " dragging" : ""}`}
+                style={{ paddingLeft: 8 + item.depth * 20 }}
+                draggable={!isCurrentWs(item.ws)}
+                onClick={() => switchWorkspace(item.ws.id)}
+                onDragStart={(e) => handleDragStart(e, item.ws)}
+                onDragOver={(e) => handleDragOver(e, item.ws)}
+                onDragLeave={handleDragLeave}
+                onDrop={(e) => handleDrop(e, item.ws)}
+                title={isCurrentWs(item.ws) ? "Auto-tracked — mirrors your live browser tabs" : item.ws.description || item.ws.name}
+              >
+                {/* Toggle arrow for parents */}
+                {item.hasChildren ? (
+                  <span
+                    className={`ws-toggle${collapsed.has(item.ws.id) ? "" : " open"}`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleCollapse(item.ws.id);
+                    }}
+                  >
+                    <IconChevronRight size={12} />
+                  </span>
+                ) : (
+                  <span className="ws-toggle-placeholder" />
+                )}
+                {isCurrentWs(item.ws) ? (
+                  <div className="ws-avatar ws-avatar-live" title="Live browser tabs">
+                    <IconMonitor size={14} />
+                  </div>
+                ) : (
+                  <div
+                    className="ws-avatar"
+                    style={{ background: avatarColor(item.ws.name) }}
+                  >
+                    {avatarLetter(item.ws.name)}
+                  </div>
+                )}
+                <span className={`ws-item-name${isCurrentWs(item.ws) ? " ws-item-name-live" : ""}`}>{item.ws.name}</span>
+                {/* ⋮ context menu trigger — hidden for auto-tracked workspace (Opt 20) */}
+                {!isCurrentWs(item.ws) && (
+                  <button
+                    className="ws-menu-trigger"
+                    title="More actions"
+                    onClick={(e) => openContextMenu(e, item.ws)}
+                  >
+                    <IconDots size={12} />
+                  </button>
+                )}
+              </div>
+            </div>
+            {/* Create form — appears below anchor workspace */}
+            {showCreateHere && (
+              <div className="ws-create-form" style={{ paddingLeft: 8 + (createParentId > 0 ? item.depth + 1 : 0) * 20 }}>
+                <input
+                  placeholder={createParentId ? "Sub-workspace name" : "Workspace name"}
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleCreate();
+                    if (e.key === "Escape") { setShowCreate(false); setCreateParentId(0); }
+                  }}
+                  autoFocus
+                />
+                <button className="btn btn-accent btn-sm" onClick={handleCreate}>Add</button>
+                <button className="icon-btn" onClick={() => { setShowCreate(false); setCreateParentId(0); }}>
+                  <IconX size={14} />
+                </button>
+              </div>
+            )}
+          </Fragment>
+          );
+        })}
+
+        {/* Fallback: show create form at top if anchor is not in the visible list */}
+        {showCreate && createFormAnchor != null && !flatList.some(f => f.ws.id === createFormAnchor) && (
+          <div className="ws-create-form" style={{ paddingLeft: 8 + (createParentId > 0 ? 1 : 0) * 20 }}>
             <input
               placeholder={createParentId ? "Sub-workspace name" : "Workspace name"}
               value={newName}
@@ -408,60 +500,6 @@ export function Sidebar() {
             </button>
           </div>
         )}
-
-        {/* Workspace items */}
-        {flatList.map((item, idx) => {
-          if (!isVisible(item, idx)) return null;
-          const isTop = item.ws.parent_id === 0;
-
-          return (
-            <div key={item.ws.id}>
-              <div
-                className={`ws-item${currentWsId === item.ws.id ? " selected" : ""}${isTop ? " ws-item-top" : ""}${dragOverWs?.id === item.ws.id ? " drag-over" : ""}${dragWs?.id === item.ws.id ? " dragging" : ""}`}
-                style={{ paddingLeft: 8 + item.depth * 20 }}
-                draggable={!isCurrentWs(item.ws)}
-                onClick={() => switchWorkspace(item.ws.id)}
-                onDragStart={(e) => handleDragStart(e, item.ws)}
-                onDragOver={(e) => handleDragOver(e, item.ws)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, item.ws)}
-                title={isCurrentWs(item.ws) ? "Permanent workspace" : item.ws.description || item.ws.name}
-              >
-                {/* Toggle arrow for parents */}
-                {item.hasChildren ? (
-                  <span
-                    className={`ws-toggle${collapsed.has(item.ws.id) ? "" : " open"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCollapse(item.ws.id);
-                    }}
-                  >
-                    <IconChevronRight size={12} />
-                  </span>
-                ) : (
-                  <span className="ws-toggle-placeholder" />
-                )}
-                <div
-                  className="ws-avatar"
-                  style={{ background: avatarColor(item.ws.name) }}
-                >
-                  {avatarLetter(item.ws.name)}
-                </div>
-                <span className="ws-item-name">{item.ws.name}</span>
-                {/* ⋮ context menu trigger — hidden for Current workspace (Opt 20) */}
-                {!isCurrentWs(item.ws) && (
-                  <button
-                    className="ws-menu-trigger"
-                    title="More actions"
-                    onClick={(e) => openContextMenu(e, item.ws)}
-                  >
-                    <IconDots size={12} />
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
 
         {/* No "New Workspace" button at bottom (Opt 15) */}
       </div>

@@ -36,7 +36,7 @@ export async function upsertTab(tab: Partial<Tab> & { url: string }): Promise<Ta
   });
 }
 
-export async function removeTab(windowId: number, chromeTabId: number, currentWorkspaceId?: number, tabDbId?: number): Promise<void> {
+export async function removeTab(windowId: number, chromeTabId: number, currentWorkspaceId?: number, tabDbId?: number): Promise<boolean> {
   return dbRemoveTab(windowId, chromeTabId, currentWorkspaceId ?? 0, tabDbId);
 }
 

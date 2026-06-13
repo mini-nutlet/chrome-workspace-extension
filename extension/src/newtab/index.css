@@ -1582,3 +1582,46 @@ body {
   border: 1px dashed var(--accent);
   background: var(--accent-lighter);
 }
+
+/* ── Open Tabs workspace (auto-tracked live session) ────────────── */
+
+.ws-item-live {
+  background: var(--accent-lighter, #eef2ff);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin: 2px 0 10px 0;
+  position: relative;
+}
+.ws-item-live::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -6px;
+  height: 1px;
+  background: var(--border);
+}
+.ws-item-live:hover {
+  background: var(--accent-light, #dde4ff);
+}
+.ws-item-live.selected {
+  background: var(--accent-light);
+  border-color: var(--accent);
+}
+
+.ws-avatar-live {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-xs);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--accent);
+  color: #fff;
+}
+
+.ws-item-name-live {
+  font-weight: 500;
+  color: var(--accent);
+}

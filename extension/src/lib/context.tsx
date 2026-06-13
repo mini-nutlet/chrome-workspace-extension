@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import type { Workspace, Tab, TabGroupWithTabs, TabGroupTree, AutoGroupRule, SearchResult } from "./types";
 import * as api from "./api";
+import { CURRENT_WS_NAME } from "../db/workspace-repo";
 
 export type Theme = "system" | "light" | "dark";
 
@@ -261,11 +262,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Fast path for the "Current" workspace: build the tree directly from
+    // Fast path for the auto-tracked workspace: build the tree directly from
     // live browser tabs instead of reading from IndexedDB.  This gives instant
     // display on first load and real-time updates without a DB round-trip.
     const ws = workspacesRef.current.find((w) => w.id === currentWsId);
-    if (ws?.name === "Current" && ws.parent_id === 0) {
+    if (ws?.name === CURRENT_WS_NAME && ws.parent_id === 0) {
       const gen = ++liveTreeGen.current;
       try {
         const live = await buildLiveTree();
@@ -368,7 +369,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Once workspaces are loaded, restore the last selection or auto-select
-  // the "Current" workspace so the UI immediately shows live browser tabs.
+  // the auto-tracked workspace so the UI immediately shows live browser tabs.
   useEffect(() => {
     if (workspaces.length === 0) return;
     if (currentWsId > 0) return; // already selected
@@ -378,7 +379,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (stored > 0 && workspaces.some((w) => w.id === stored)) {
         setCurrentWsId(stored);
       } else {
-        const cur = workspaces.find((w) => w.name === "Current" && w.parent_id === 0);
+        const cur = workspaces.find((w) => w.name === CURRENT_WS_NAME && w.parent_id === 0);
         if (cur) {
           setCurrentWsId(cur.id);
           chrome.storage.local.set({ currentWorkspaceId: cur.id });
@@ -640,7 +641,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const closeAllDuplicateTabs = useCallback(async () => {
     if (currentWsId <= 0) return;
     const currentWs = workspaces.find((w) => w.id === currentWsId);
-    const isCurrent = currentWs?.name === "Current" && currentWs?.parent_id === 0;
+    const isCurrent = currentWs?.name === CURRENT_WS_NAME && currentWs?.parent_id === 0;
 
     // Collect all tabs from the tree (both grouped and ungrouped).
     const allTabs: Tab[] = [];
@@ -693,7 +694,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           if (tab.chrome_tab_id > 0) {
             try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
           }
-          try { await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); didClose = true; } catch {}
+          try { const removed = await api.removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); if (removed) didClose = true; } catch {}
         } else {
           seen.add(n);
         }
@@ -847,7 +848,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           // For Current, skip DB refresh — markActive already updated
           // the live tree; tabs-changed will fire from syncActiveByUrl.
           const cw = workspacesRef.current.find((w) => w.id === currentWsId);
-          if (!cw || cw.name !== "Current" || cw.parent_id !== 0) {
+          if (!cw || cw.name !== CURRENT_WS_NAME || cw.parent_id !== 0) {
             await refreshTree();
           }
           return;
@@ -882,7 +883,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     // tabs-changed fires from the background worker.
     await new Promise((r) => setTimeout(r, 200));
     const cw2 = workspacesRef.current.find((w) => w.id === currentWsId);
-    if (!cw2 || cw2.name !== "Current" || cw2.parent_id !== 0) {
+    if (!cw2 || cw2.name !== CURRENT_WS_NAME || cw2.parent_id !== 0) {
       await refreshTree();
     }
   }, [currentWsId, refreshTree]);

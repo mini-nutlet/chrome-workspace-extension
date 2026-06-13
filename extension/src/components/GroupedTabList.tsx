@@ -115,7 +115,7 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
     for (const tab of tabs) {
       await closeBrowserTabByUrl(tab.url);
       if (isCurrent) {
-        try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); } catch { /* ignore */ }
+        try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); } catch { /* ignore return — caller already refreshes */ }
       }
     }
     await refreshTree();
@@ -172,7 +172,7 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
           if (tab.chrome_tab_id > 0) {
             try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
           }
-          try { await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); didClose = true; } catch {}
+          try { const removed = await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); if (removed) didClose = true; } catch {}
         } else {
           seen.add(normalized);
         }

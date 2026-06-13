@@ -11,8 +11,24 @@ export interface Workspace {
   updated_at: string;
 }
 
-/** Reserved name for the auto-tracking workspace. */
-export const CURRENT_WS_NAME = "Current";
+/** Reserved name for the auto-tracking workspace that mirrors live browser tabs. */
+export const CURRENT_WS_NAME = "Open Tabs";
+
+/** One-shot migration: rename any legacy "Current" workspace to the new name. */
+let migrationDone = false;
+export async function migrateCurrentWsName(): Promise<void> {
+  if (migrationDone) return;
+  migrationDone = true;
+  try {
+    const db = await getDb();
+    const all = await db.getAll("workspaces");
+    const legacy = all.filter((w: WorkspaceRow) => w.name === "Current" && w.parentId === 0);
+    for (const ws of legacy) {
+      ws.name = CURRENT_WS_NAME;
+      await db.put("workspaces", ws);
+    }
+  } catch { /* non-critical — migration will retry next session */ }
+}
 
 function toApi(row: WorkspaceRow): Workspace {
   return {
@@ -42,7 +58,7 @@ export async function getWorkspace(id: number): Promise<Workspace | null> {
 export async function createWorkspace(
   name: string, description = "", icon = "", parentId = 0, afterId = 0
 ): Promise<Workspace> {
-  // "Current" is the reserved auto-tracking workspace — only one may exist.
+  // "Open Tabs" is the reserved auto-tracking workspace — only one may exist.
   if (name === CURRENT_WS_NAME && parentId === 0) {
     const db = await getDb();
     const all = await db.getAll("workspaces");
@@ -88,7 +104,7 @@ export async function updateWorkspace(id: number, fields: {
   const db = await getDb();
   const row = await db.get("workspaces", id);
   if (!row) return null;
-  // Block renaming any workspace to the reserved "Current" name.
+  // Block renaming any workspace to the reserved auto-tracking name.
   if (fields.name === CURRENT_WS_NAME && row.name !== CURRENT_WS_NAME && row.parentId === 0) {
     const all = await db.getAll("workspaces");
     const existing = all.find((w: WorkspaceRow) => w.name === CURRENT_WS_NAME && w.parentId === 0);

@@ -1,5 +1,6 @@
 import { useApp } from "../lib/context";
 import type { Workspace } from "../lib/types";
+import { CURRENT_WS_NAME } from "../db/workspace-repo";
 import { IconMonitor, IconSun, IconMoon, IconSettings, IconSearch, IconLayers, IconWindow, IconSave, IconRefresh, IconTrash, IconX } from "./Icons";
 import { ResultList } from "./ResultList";
 import { GroupedTabList } from "./GroupedTabList";
@@ -74,7 +75,7 @@ export function MainContent() {
   //  - currentWsId > 0 && parent_id > 0 → sub-workspace (show groups/tabs)
   const isTopLevel = currentWsId > 0 && currentWs?.parent_id === 0;
   const isSubLevel = currentWsId > 0 && currentWs && currentWs.parent_id > 0;
-  const isCurrent = currentWs?.name === "Current" && currentWs?.parent_id === 0;
+  const isCurrent = currentWs?.name === CURRENT_WS_NAME && currentWs?.parent_id === 0;
 
   // Filter sub-workspaces for the current top-level workspace.
   const subWorkspaces = workspaces.filter((w) => w.parent_id === currentWsId);

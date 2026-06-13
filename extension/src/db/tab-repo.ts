@@ -153,7 +153,28 @@ export async function upsertTab(tab: {
     await tx.store.put(existing);
     await tx.done;
 
-    await linkWorkspace(existing.id!, tab.workspace_id, active, tab.group_id ?? 0);
+    // When an explicit group_id was provided (drag-and-drop, restore
+    // session), honour it.  Otherwise reset to 0 and let auto-group
+    // re-evaluate based on the new URL — groups track URLs, not tabIds.
+    const explicitGroup = (tab.group_id ?? 0) > 0 ? tab.group_id! : 0;
+    await linkWorkspace(existing.id!, tab.workspace_id, active, explicitGroup > 0 ? explicitGroup : 0);
+
+    if (explicitGroup <= 0) {
+      // Auto-group: checks tabs with group_id=0 and applies domain rules.
+      const { autoGroupTab } = await import("./autogroup-repo");
+      await autoGroupTab(existing.id!, tab.workspace_id, urlHash);
+
+      // Fallback: if still ungrouped after auto-group, assign to Ungrouped.
+      const twCheck = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [existing.id!, tab.workspace_id]);
+      if (twCheck && twCheck.groupId === 0) {
+        const ugId = await ungroupedGroupId(tab.workspace_id);
+        if (ugId > 0) {
+          twCheck.groupId = ugId;
+          await db.put("tabWorkspaces", twCheck);
+        }
+      }
+    }
+
     const tw = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [existing.id!, tab.workspace_id]);
     return toApi(existing, tw);
   }
@@ -175,7 +196,25 @@ export async function upsertTab(tab: {
       t.title = tab.title;
       t.updatedAt = now();
       await db.put("tabs", t);
-      await linkWorkspace(t.id!, tab.workspace_id, active, tab.group_id ?? 0);
+      // Honour explicit group_id; otherwise re-evaluate auto-group for
+      // the (potentially new) URL — groups track URLs, not tabIds.
+      const urlExplicitGroup = (tab.group_id ?? 0) > 0 ? tab.group_id! : 0;
+      await linkWorkspace(t.id!, tab.workspace_id, active, urlExplicitGroup > 0 ? urlExplicitGroup : 0);
+
+      if (urlExplicitGroup <= 0) {
+        const { autoGroupTab } = await import("./autogroup-repo");
+        await autoGroupTab(t.id!, tab.workspace_id, urlHash);
+
+        const twCheck = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [t.id!, tab.workspace_id]);
+        if (twCheck && twCheck.groupId === 0) {
+          const ugId = await ungroupedGroupId(tab.workspace_id);
+          if (ugId > 0) {
+            twCheck.groupId = ugId;
+            await db.put("tabWorkspaces", twCheck);
+          }
+        }
+      }
+
       const tw2 = await db.getFromIndex("tabWorkspaces", "tabWorkspace", [t.id!, tab.workspace_id]);
       return toApi(t, tw2);
     }
@@ -211,34 +250,61 @@ export async function upsertTab(tab: {
   return toApi(row, tw2);
 }
 
-export async function removeTab(windowId: number, chromeTabId: number, currentWsId: number, tabDbId?: number): Promise<void> {
+/** Remove a tab from the specified workspace.  Returns true when a
+ *  row or junction was actually deleted, false when the tab could not
+ *  be found or no junction existed for the workspace. */
+export async function removeTab(windowId: number, chromeTabId: number, currentWsId: number, tabDbId?: number): Promise<boolean> {
   const db = await getDb();
   let existing: TabRow | undefined;
 
-  // Primary lookup: windowChrome index (matches live browser tabs).
-  if (windowId > 0 || chromeTabId > 0) {
+  // Preferred: direct primary-key lookup (most reliable when the caller
+  // knows the exact DB row to delete, e.g. group close-duplicates and
+  // trash-button flows that pass tab.id as tabDbId).
+  if (tabDbId != null && tabDbId > 0) {
+    existing = await db.transaction("tabs").store.get(tabDbId);
+    // Log coordinate drift for diagnostics — the caller passed a
+    // window_id / chrome_tab_id that doesn't match the stored row.
+    if (existing) {
+      if (existing.windowId !== windowId || existing.chromeTabId !== chromeTabId) {
+        console.debug(
+          "[removeTab] PK lookup succeeded but coordinates differ:",
+          { caller: [windowId, chromeTabId], stored: [existing.windowId, existing.chromeTabId], tabId: tabDbId },
+        );
+      }
+      // Safety: if the stored row is a live browser tab (chromeTabId>0)
+      // but the caller passed snapshot-style coordinates (0, 0), the
+      // caller may have stale data.  Still honor the request since the
+      // PK identifies the exact row, but warn prominently.
+      if (existing.chromeTabId > 0 && windowId === 0 && chromeTabId === 0) {
+        console.warn(
+          "[removeTab] Deleting live browser tab via PK fallback — caller had snapshot coordinates (0,0).",
+          { tabId: tabDbId, storedWindowId: existing.windowId, storedChromeTabId: existing.chromeTabId },
+        );
+      }
+    }
+  }
+
+  // Fallback 1: windowChrome index lookup (matches live browser tabs by
+  // their browser window/tab IDs).  Only relevant for callers that don't
+  // pass tabDbId (e.g. legacy or background sync without the PK).
+  if (!existing && (windowId > 0 || chromeTabId > 0)) {
     const row = await db.transaction("tabs").store.index("windowChrome").get([windowId, chromeTabId]);
     if (row) existing = row;
   }
 
-  // Fallback 1: snapshot tabs store chrome_tab_id = -(tab_id).
+  // Fallback 2: snapshot tabs store chrome_tab_id = -(tab_id).
+  // Convert the negative chromeTabId back to the positive PK.
   if (!existing && windowId === 0 && chromeTabId < 0) {
     existing = await db.transaction("tabs").store.get(-chromeTabId);
   }
 
-  // Fallback 2: direct primary-key lookup (handles snapshots with
-  // chrome_tab_id=0 that don't match any index entry).
-  if (!existing && tabDbId != null && tabDbId > 0) {
-    existing = await db.transaction("tabs").store.get(tabDbId);
-    // Verify: don't delete a live tab row by accident — only use
-    // the pk fallback when the index approach already failed and
-    // the stored row is indeed a snapshot.
-    if (existing && existing.chromeTabId > 0 && windowId === 0 && chromeTabId === 0) {
-      existing = undefined; // mismatch — refuse to delete live tab by snapshot coordinates
-    }
+  if (!existing) {
+    console.warn(
+      "[removeTab] Unable to find tab row — all lookups failed.",
+      { windowId, chromeTabId, currentWsId, tabDbId },
+    );
+    return false;
   }
-
-  if (!existing) return;
 
   const tabId = existing.id!;
   const tx = db.transaction("tabWorkspaces", "readwrite");
@@ -267,6 +333,7 @@ export async function removeTab(windowId: number, chromeTabId: number, currentWs
   // untouched so its windowChrome index stays consistent for future
   // delete / navigate calls.  is_open is already handled by the
   // cross-reference in refreshTree (context.tsx).
+  return true;
 }
 
 export async function findDuplicate(url: string): Promise<{

@@ -3,7 +3,7 @@
 
 import * as api from "../lib/api";
 import { syncActiveToAllWorkspaces } from "../db/tab-repo";
-import { CURRENT_WS_NAME } from "../db/workspace-repo";
+import { CURRENT_WS_NAME, migrateCurrentWsName } from "../db/workspace-repo";
 import { loadSimilarityRules, findRule, type SimilarityRule } from "../db/database";
 
 const NEWTAB_URL = "chrome://newtab/";
@@ -35,7 +35,7 @@ async function ensureCurrentWorkspace(): Promise<number> {
     const cur = list.find((w) => w.name === CURRENT_WS_NAME);
     if (cur) return cur.id;
     const created = await api.createWorkspace(CURRENT_WS_NAME, "Auto-tracked tabs", "");
-    // If somehow multiple "Current" workspaces were already created, keep only the first.
+    // Deduplicate: keep only one auto-tracked workspace.
     const all = await api.listWorkspaces();
     const dupes = all.filter((w) => w.name === CURRENT_WS_NAME);
     for (let i = 1; i < dupes.length; i++) {
@@ -399,6 +399,9 @@ async function onStartupOrInstall() {
     }
   } catch (e) { console.warn("[workspace-bg] startup error:", e); }
 }
+
+// Rename legacy "Current" workspace to "Open Tabs" before any other logic runs.
+migrateCurrentWsName().catch(() => {});
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") chrome.runtime.openOptionsPage();
