@@ -324,11 +324,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const activeUrls = new Set(
         allOpenTabs.filter((tab) => tab.active && tab.url).map((tab) => normUrl(tab.url!))
       );
-      // Count exactly matching URLs across all open tabs (for dupe badge).
+      // Count normalised URLs across all open tabs (for dupe badge).
+      // Use the same normUrl as openUrls/activeUrls so that stored-tab
+      // URLs differing only in trailing slash / www / hash still match.
       const urlCount = new Map<string, number>();
       for (const t of allOpenTabs) {
         if (t.url) {
-          urlCount.set(t.url, (urlCount.get(t.url) ?? 0) + 1);
+          const key = normUrl(t.url);
+          urlCount.set(key, (urlCount.get(key) ?? 0) + 1);
         }
       }
 
@@ -337,14 +340,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           const tabNorm = normUrl(tab.url);
           tab.is_open = openChromeIds.has(tab.chrome_tab_id) || openUrls.has(tabNorm);
           tab.active = activeChromeIds.has(tab.chrome_tab_id) || activeUrls.has(tabNorm);
-          tab.open_count = urlCount.get(tab.url) ?? 0;
+          tab.open_count = urlCount.get(tabNorm) ?? 0;
         }
       }
       for (const tab of tree.ungrouped_tabs) {
         const tabNorm = normUrl(tab.url);
         tab.is_open = openChromeIds.has(tab.chrome_tab_id) || openUrls.has(tabNorm);
         tab.active = activeChromeIds.has(tab.chrome_tab_id) || activeUrls.has(tabNorm);
-        tab.open_count = urlCount.get(tab.url) ?? 0;
+        tab.open_count = urlCount.get(tabNorm) ?? 0;
       }
 
       setTree(tree);

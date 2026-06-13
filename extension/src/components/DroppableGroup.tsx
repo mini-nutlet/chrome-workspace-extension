@@ -158,6 +158,7 @@ export function DroppableGroup({
                 title="Close duplicate tabs in group"
                 onClick={(e) => {
                   e.stopPropagation();
+                  console.log("[DroppableGroup] close-duplicates button CLICKED", { groupName: group.name, tabCount: group.tabs.length, isCurrent, onCloseDuplicatesType: typeof onCloseDuplicates, onCloseDuplicatesName: (onCloseDuplicates as any)?.name });
                   onCloseDuplicates(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url }))).catch((err: unknown) => {
                     console.error("[DroppableGroup] handleCloseDuplicates failed:", err);
                   });

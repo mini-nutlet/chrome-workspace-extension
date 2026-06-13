@@ -122,52 +122,71 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   };
 
   // Close all duplicate tabs in a group, keeping only one per URL.
-  // In the Current workspace, duplicates are browser tabs (×N badge) —
-  //   close all but one browser tab per URL.
-  // In other workspaces, duplicates are snapshot DB entries — delete extras.
+  // Works for both Current and non-Current workspaces:
+  //   1. Close duplicate browser tabs (keep one per URL).
+  //   2. Non-Current also deduplicates DB snapshot entries.
   const handleCloseDuplicates = async (
     tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[],
   ) => {
     let closedCount = 0;
+    const tag = "[handleCloseDuplicates]";
 
     try {
-      if (isCurrent) {
-        // Current workspace: close duplicate browser tabs per URL.
-        const allOpenTabs = await chrome.tabs.query({});
-        const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
-        for (const t of allOpenTabs) {
-          if (!t.url || t.id == null) continue;
-          const norm = api.normalizeUrlAggressive(t.url);
-          if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
-          browserByUrl.get(norm)!.push(t);
-        }
-        const groupUrls = new Set(tabs.map((t) => api.normalizeUrlAggressive(t.url)));
-        for (const [normUrl, browserTabs] of browserByUrl) {
-          if (!groupUrls.has(normUrl)) continue;
-          if (browserTabs.length > 1) {
-            const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
-            for (const t of browserTabs) {
-              if (t.id !== keep.id) {
-                try { await chrome.tabs.remove(t.id!); closedCount++; } catch {}
-              }
+      // ── Step 1: close duplicate browser tabs (all workspaces) ──────
+      const allOpenTabs = await chrome.tabs.query({});
+      console.log(`${tag} queried ${allOpenTabs.length} open browser tabs (isCurrent=${isCurrent})`);
+
+      const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
+      for (const t of allOpenTabs) {
+        if (!t.url || t.id == null) continue;
+        const norm = api.normalizeUrlAggressive(t.url);
+        if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
+        browserByUrl.get(norm)!.push(t);
+      }
+      const groupUrls = new Set(tabs.map((t) => api.normalizeUrlAggressive(t.url)));
+      console.log(`${tag} group has ${groupUrls.size} unique URLs, browser has ${browserByUrl.size} buckets`);
+
+      for (const [normUrl, browserTabs] of browserByUrl) {
+        if (!groupUrls.has(normUrl)) continue;
+        if (browserTabs.length > 1) {
+          const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
+          console.log(`${tag} URL "${normUrl}" has ${browserTabs.length} browser tabs, keeping tab#${keep.id}${keep.active ? " (active)" : ""}`);
+          for (const t of browserTabs) {
+            if (t.id !== keep.id) {
+              try { await chrome.tabs.remove(t.id!); closedCount++; console.log(`${tag} closed browser tab#${t.id}`); } catch (e) { console.warn(`${tag} failed to close tab#${t.id}`, e); }
             }
           }
         }
-      } else {
-        // Other workspaces: deduplicate DB entries by aggressive URL.
+      }
+
+      // ── Step 2: non-Current — also deduplicate DB entries ─────────
+      if (!isCurrent) {
         const sorted = [...tabs].sort((a, b) => {
           const aLive = a.chrome_tab_id > 0 ? 1 : 0;
           const bLive = b.chrome_tab_id > 0 ? 1 : 0;
           return bLive - aLive;
         });
+        console.log(`${tag} Non-Current: sorted ${sorted.length} tabs (live first)`, sorted.map((t) => ({ id: t.id, ctid: t.chrome_tab_id, live: t.chrome_tab_id > 0 })));
+
         const seen = new Set<string>();
         for (const tab of sorted) {
           const normalized = api.normalizeUrlAggressive(tab.url);
           if (seen.has(normalized)) {
+            console.log(`${tag} Non-Current: DUPLICATE tab id=${tab.id} url="${normalized}"`, { window_id: tab.window_id, chrome_tab_id: tab.chrome_tab_id });
             if (tab.chrome_tab_id > 0) {
-              try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
+              try { await chrome.tabs.remove(tab.chrome_tab_id); console.log(`${tag} Non-Current: closed browser tab#${tab.chrome_tab_id}`); } catch (e) { console.warn(`${tag} Non-Current: failed to close browser tab#${tab.chrome_tab_id}`, e); }
             }
-            try { const removed = await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); if (removed) closedCount++; } catch {}
+            try {
+              const removed = await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id);
+              if (removed) {
+                closedCount++;
+                console.log(`${tag} Non-Current: removeTab succeeded for id=${tab.id}`);
+              } else {
+                console.warn(`${tag} Non-Current: removeTab returned false for id=${tab.id} — tab or junction not found`);
+              }
+            } catch (e) {
+              console.error(`${tag} Non-Current: removeTab threw for id=${tab.id}`, e);
+            }
           } else {
             seen.add(normalized);
           }
