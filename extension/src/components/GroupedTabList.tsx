@@ -128,58 +128,83 @@ export function GroupedTabList({ isCurrent }: { isCurrent?: boolean }) {
   const handleCloseDuplicates = async (
     tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[],
   ) => {
-    let didClose = false;
+    let closedCount = 0;
 
-    if (isCurrent) {
-      // Current workspace: close duplicate browser tabs per URL.
-      // Use aggressive normalisation (strips query string) so that URLs
-      // differing only in query params are treated as duplicates —
-      // matching the DB's hashUrl behaviour.
-      const allOpenTabs = await chrome.tabs.query({});
-      const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
-      for (const t of allOpenTabs) {
-        if (!t.url || t.id == null) continue;
-        const norm = api.normalizeUrlAggressive(t.url);
-        if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
-        browserByUrl.get(norm)!.push(t);
-      }
-      const groupUrls = new Set(tabs.map((t) => api.normalizeUrlAggressive(t.url)));
-      for (const [normUrl, browserTabs] of browserByUrl) {
-        if (!groupUrls.has(normUrl)) continue;
-        if (browserTabs.length > 1) {
-          const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
-          for (const t of browserTabs) {
-            if (t.id !== keep.id) {
-              try { await chrome.tabs.remove(t.id!); didClose = true; } catch {}
+    try {
+      if (isCurrent) {
+        // Current workspace: close duplicate browser tabs per URL.
+        const allOpenTabs = await chrome.tabs.query({});
+        const browserByUrl = new Map<string, chrome.tabs.Tab[]>();
+        for (const t of allOpenTabs) {
+          if (!t.url || t.id == null) continue;
+          const norm = api.normalizeUrlAggressive(t.url);
+          if (!browserByUrl.has(norm)) browserByUrl.set(norm, []);
+          browserByUrl.get(norm)!.push(t);
+        }
+        const groupUrls = new Set(tabs.map((t) => api.normalizeUrlAggressive(t.url)));
+        for (const [normUrl, browserTabs] of browserByUrl) {
+          if (!groupUrls.has(normUrl)) continue;
+          if (browserTabs.length > 1) {
+            const keep = browserTabs.find((t) => t.active) ?? browserTabs[0]!;
+            for (const t of browserTabs) {
+              if (t.id !== keep.id) {
+                try { await chrome.tabs.remove(t.id!); closedCount++; } catch {}
+              }
             }
           }
         }
-      }
-    } else {
-      // Other workspaces: deduplicate DB entries by aggressive URL.
-      // Use aggressive normalisation (strips protocol + query) so that
-      // http→https variants and minor query differences are caught.
-      // Live tabs (chrome_tab_id > 0) are preferred; snapshots are removed.
-      const sorted = [...tabs].sort((a, b) => {
-        const aLive = a.chrome_tab_id > 0 ? 1 : 0;
-        const bLive = b.chrome_tab_id > 0 ? 1 : 0;
-        return bLive - aLive;
-      });
-      const seen = new Set<string>();
-      for (const tab of sorted) {
-        const normalized = api.normalizeUrlAggressive(tab.url);
-        if (seen.has(normalized)) {
-          if (tab.chrome_tab_id > 0) {
-            try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
+      } else {
+        // Other workspaces: deduplicate DB entries by aggressive URL.
+        const sorted = [...tabs].sort((a, b) => {
+          const aLive = a.chrome_tab_id > 0 ? 1 : 0;
+          const bLive = b.chrome_tab_id > 0 ? 1 : 0;
+          return bLive - aLive;
+        });
+        const seen = new Set<string>();
+        for (const tab of sorted) {
+          const normalized = api.normalizeUrlAggressive(tab.url);
+          if (seen.has(normalized)) {
+            if (tab.chrome_tab_id > 0) {
+              try { await chrome.tabs.remove(tab.chrome_tab_id); } catch {}
+            }
+            try { const removed = await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); if (removed) closedCount++; } catch {}
+          } else {
+            seen.add(normalized);
           }
-          try { const removed = await removeTab(tab.window_id, tab.chrome_tab_id, currentWsId, tab.id); if (removed) didClose = true; } catch {}
-        } else {
-          seen.add(normalized);
         }
       }
-    }
 
-    if (didClose) await refreshTree();
+      if (closedCount > 0) {
+        await refreshTree();
+        try {
+          chrome.notifications.create(`dedup-group-${Date.now()}`, {
+            type: "basic",
+            iconUrl: "icons/icon48.png",
+            title: "Duplicates closed",
+            message: `Closed ${closedCount} duplicate tab${closedCount > 1 ? "s" : ""} in this group.`,
+          });
+        } catch { /* notifications may not be available */ }
+      } else {
+        try {
+          chrome.notifications.create(`dedup-group-${Date.now()}`, {
+            type: "basic",
+            iconUrl: "icons/icon48.png",
+            title: "No duplicates",
+            message: "No duplicate tabs found in this group.",
+          });
+        } catch { /* notifications may not be available */ }
+      }
+    } catch (err) {
+      console.error("[handleCloseDuplicates] Error:", err);
+      try {
+        chrome.notifications.create(`dedup-err-${Date.now()}`, {
+          type: "basic",
+          iconUrl: "icons/icon48.png",
+          title: "Error closing duplicates",
+          message: String(err).slice(0, 180),
+        });
+      } catch { /* notifications may not be available */ }
+    }
   };
 
   // Shared drop handler for external tabs (no-group zone + ungrouped zone).

@@ -11,8 +11,8 @@ interface DroppableGroupProps {
   onUpdateGroup: (id: number, updates: Record<string, unknown>) => void;
   onDropTab: (tabId: number, groupId: number) => void;
   onDropExternal?: (data: { url: string; title: string; windowId: number; chromeTabId: number }, groupId: number) => void;
-  onCloseAll?: (tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[]) => void;
-  onCloseDuplicates?: (tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[]) => void;
+  onCloseAll?: (tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[]) => Promise<void>;
+  onCloseDuplicates?: (tabs: { id: number; window_id: number; chrome_tab_id: number; url: string }[]) => Promise<void>;
   isCurrent?: boolean;
 }
 
@@ -150,28 +150,36 @@ export function DroppableGroup({
         </span>
         )}
 
-        {group.tabs.length > 0 && onCloseAll && (
+        {group.tabs.length > 0 && (onCloseAll || onCloseDuplicates) && (
           <>
-            <button
-              className="group-close-all"
-              title="Close duplicate tabs in group"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCloseDuplicates?.(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url })));
-              }}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>
-            </button>
-            <button
-              className="group-close-all"
-              title="Close all tabs in group"
-              onClick={(e) => {
-                e.stopPropagation();
-                onCloseAll(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url })));
-              }}
-            >
-              <IconX size={12} />
-            </button>
+            {onCloseDuplicates && (
+              <button
+                className="group-close-all"
+                title="Close duplicate tabs in group"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCloseDuplicates(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url }))).catch((err: unknown) => {
+                    console.error("[DroppableGroup] handleCloseDuplicates failed:", err);
+                  });
+                }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/></svg>
+              </button>
+            )}
+            {onCloseAll && (
+              <button
+                className="group-close-all"
+                title="Close all tabs in group"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onCloseAll(group.tabs.map((t) => ({ id: t.id, window_id: t.window_id, chrome_tab_id: t.chrome_tab_id, url: t.url }))).catch((err: unknown) => {
+                    console.error("[DroppableGroup] handleCloseAll failed:", err);
+                  });
+                }}
+              >
+                <IconX size={12} />
+              </button>
+            )}
           </>
         )}
         <span className={`group-toggle${collapsed ? "" : " open"}`}>
