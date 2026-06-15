@@ -116,7 +116,6 @@ export async function reapplyAutoGroup(workspaceId: number): Promise<{ grouped_c
 export function normalizeUrl(u: string): string {
   try {
     const p = new URL(u);
-    p.hash = "";
     p.hostname = p.hostname.replace(/^www\./, "");
     if (p.pathname.endsWith("/") && p.pathname.length > 1) p.pathname = p.pathname.slice(0, -1);
     return p.toString();
@@ -124,14 +123,13 @@ export function normalizeUrl(u: string): string {
 }
 
 /**
- * Aggressive URL normalisation — also strips the query string so that
- * URLs differing only in query params are treated as duplicates.
- * Matches the DB's hashUrl behaviour used for upsert dedup.
+ * URL normalisation — strips query string + trailing slash + www,
+ * lowercases.  Hash fragments are preserved so that SPA hash-route
+ * pages are distinct by default.  Matches the DB's hashUrl behaviour.
  */
 export function normalizeUrlAggressive(u: string): string {
   try {
     const p = new URL(u);
-    p.hash = "";
     p.search = "";
     p.hostname = p.hostname.replace(/^www\./, "");
     if (p.pathname.endsWith("/") && p.pathname.length > 1) p.pathname = p.pathname.slice(0, -1);

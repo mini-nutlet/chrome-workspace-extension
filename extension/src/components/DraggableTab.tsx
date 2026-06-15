@@ -33,15 +33,6 @@ function faviconUrl(url: string): string {
   }
 }
 
-function cleanUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    return u.hostname + u.pathname;
-  } catch {
-    return url;
-  }
-}
-
 // Green dot indicating the tab is currently open in the browser.
 function OpenDot() {
   return (
@@ -86,7 +77,7 @@ export function DraggableTab({ tab, onNavigate, onClose, isCurrent }: DraggableT
             <span className="badge badge-active">ACTIVE</span>
           )}
         </div>
-        <div className="tab-url">{cleanUrl(tab.url)}</div>
+        <div className="tab-url">{tab.url}</div>
       </div>
       <div className="tab-actions">
         {/* Close duplicate tabs — closes all other browser tabs with

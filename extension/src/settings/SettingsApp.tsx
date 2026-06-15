@@ -10,6 +10,7 @@ const RULE_TYPE_LABELS: Record<SimRuleType, string> = {
   ignore_query: "Ignore query params (?...)",
   ignore_hash: "Ignore hash fragment (#...)",
   ignore_path_query: "Ignore path + query (domain only)",
+  exact: "Exact full URL (keep # and ?)",
 };
 
 function newSimRule(): SimilarityRule {
@@ -23,6 +24,8 @@ function newSimRule(): SimilarityRule {
   };
 }
 
+type SectionKey = "theme" | "simRules" | "autoGroup";
+
 export function SettingsApp() {
   const [rules, setRules] = useState<AutoGroupRule[]>([]);
   const [theme, setTheme] = useState<Theme>("system");
@@ -31,6 +34,17 @@ export function SettingsApp() {
   const [editingId, setEditingId] = useState<number | null>(null);
   const [editDomain, setEditDomain] = useState("");
   const [editGroup, setEditGroup] = useState("");
+
+  // Collapsible sections
+  const [collapsed, setCollapsed] = useState<Set<SectionKey>>(new Set());
+  const toggleSection = (key: SectionKey) => {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  };
+  const isCollapsed = (key: SectionKey) => collapsed.has(key);
 
   // Unified Single-Instance rules (URL/domain-level duplicate prevention).
   const [simRules, setSimRules] = useState<SimilarityRule[]>([]);
@@ -118,7 +132,18 @@ export function SettingsApp() {
 
       {/* Theme */}
       <section style={{ marginBottom: 32 }}>
-        <h2 style={{ fontSize: 14, fontWeight: 600, marginBottom: 10, color: "var(--text-secondary)" }}>Theme</h2>
+        <h2
+          onClick={() => toggleSection("theme")}
+          style={{
+            fontSize: 14, fontWeight: 600, marginBottom: isCollapsed("theme") ? 0 : 10,
+            color: "var(--text-secondary)", cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center", gap: 6,
+          }}
+        >
+          <span style={{ display: "inline-block", transition: "transform 0.15s", transform: isCollapsed("theme") ? "rotate(-90deg)" : "rotate(0deg)", fontSize: 10 }}>▼</span>
+          Theme
+        </h2>
+        {!isCollapsed("theme") && (
         <div className="theme-toggle" style={{ display: "inline-flex" }}>
           <button className={`icon-btn${theme === "system" ? " active" : ""}`} onClick={() => changeTheme("system")} title="System">
             <IconMonitor size={15} />
@@ -130,16 +155,31 @@ export function SettingsApp() {
             <IconMoon size={15} />
           </button>
         </div>
+        )}
       </section>
 
       {/* Single-Instance Rules — unified duplicate prevention */}
       <section style={{ marginBottom: 32 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--text-secondary)" }}>⚡ Single-Instance Rules</h2>
+          <h2
+            onClick={() => toggleSection("simRules")}
+            style={{
+              fontSize: 14, fontWeight: 600, color: "var(--text-secondary)",
+              cursor: "pointer", userSelect: "none",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+          >
+            <span style={{ display: "inline-block", transition: "transform 0.15s", transform: isCollapsed("simRules") ? "rotate(-90deg)" : "rotate(0deg)", fontSize: 10 }}>▼</span>
+            ⚡ Single-Instance Rules
+          </h2>
+          {!isCollapsed("simRules") && (
           <button className="btn btn-sm" onClick={() => saveSimRules([...simRules, newSimRule()])}>
             <IconPlus size={12} /> Add
           </button>
+          )}
         </div>
+        {!isCollapsed("simRules") && (
+        <>
         <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 10 }}>
           When you open a URL matching one of these rules, the extension treats it as a duplicate.
           <br /><strong>⚡ Auto-switch</strong>: close the new tab and switch to existing silently.
@@ -240,16 +280,32 @@ export function SettingsApp() {
             </div>
           ))}
         </div>
+        </>
+        )}
       </section>
 
       {/* Auto-group rules */}
       <section style={{ marginBottom: 32 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <h2 style={{ fontSize: 14, fontWeight: 600, color: "var(--text-secondary)" }}>Auto-Group Rules</h2>
+          <h2
+            onClick={() => toggleSection("autoGroup")}
+            style={{
+              fontSize: 14, fontWeight: 600, color: "var(--text-secondary)",
+              cursor: "pointer", userSelect: "none",
+              display: "flex", alignItems: "center", gap: 6,
+            }}
+          >
+            <span style={{ display: "inline-block", transition: "transform 0.15s", transform: isCollapsed("autoGroup") ? "rotate(-90deg)" : "rotate(0deg)", fontSize: 10 }}>▼</span>
+            Auto-Group Rules
+          </h2>
+          {!isCollapsed("autoGroup") && (
           <button className="btn btn-accent btn-sm" onClick={handleRunAutoGroup}>
             Run Now
           </button>
+          )}
         </div>
+        {!isCollapsed("autoGroup") && (
+        <>
         <p style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 10 }}>
           Tabs matching a domain pattern are automatically grouped.
         </p>
@@ -314,6 +370,8 @@ export function SettingsApp() {
             </button>
           </div>
         </div>
+        </>
+        )}
       </section>
     </div>
   );

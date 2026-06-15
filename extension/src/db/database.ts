@@ -263,13 +263,14 @@ export function findRule(url: string, rules: SimilarityRule[]): SimilarityRule |
 }
 
 /**
- * Default aggressive hash — strips query + hash + www, lowercases.
- * Used when no cached similarity rules are available (synchronous path).
+ * Default URL hash — strips query + www, lowercases.
+ * Hash fragments are preserved: SPA hash-route pages (/page#a vs /page#b)
+ * are different pages by default.  Use an ignore_hash similarity rule to
+ * collapse them.
  */
 export function hashUrl(url: string): string {
   try {
     const u = new URL(url);
-    u.hash = "";
     u.search = "";
     u.hostname = u.hostname.replace(/^www\./, "");
     return u.toString().toLowerCase();
@@ -303,10 +304,12 @@ export function hashUrlWithRules(url: string, simRules: SimilarityRule[]): strin
           // Strip query; keep hash + path
           u.search = "";
           break;
+        case "exact":
+          // Keep full URL — no normalisation (hash-based SPA routing)
+          break;
       }
     } else {
-      // No rule matched — default aggressive: strip both hash + query
-      u.hash = "";
+      // No rule matched — default: strip query, keep hash (matches hashUrl)
       u.search = "";
     }
 

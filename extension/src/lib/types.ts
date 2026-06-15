@@ -102,4 +102,4 @@ export interface SimilarityRule {
   auto_switch: boolean;
 }
 
-export type SimRuleType = "ignore_query" | "ignore_hash" | "ignore_path_query";
+export type SimRuleType = "ignore_query" | "ignore_hash" | "ignore_path_query" | "exact";
