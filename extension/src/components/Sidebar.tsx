@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useApp } from "../lib/context";
 import type { Workspace } from "../lib/types";
 import { CURRENT_WS_NAME } from "../db/workspace-repo";
+import * as api from "../lib/api";
 import { IconSearch, IconPlus, IconX, IconChevronRight, IconTrash, IconHome, IconDots, IconMonitor } from "./Icons";
 import { ContextMenu, type MenuAction } from "./ContextMenu";
 
@@ -77,7 +78,7 @@ export function Sidebar() {
   const {
     workspaces, currentWsId, query, results,
     switchWorkspace, setQuery, createWorkspace, deleteWorkspace,
-    openAllTabs, reorderWorkspaces, navigate,
+    openAllTabs, reorderWorkspaces, navigate, refreshWorkspaces,
   } = useApp();
   const [newName, setNewName] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -220,11 +221,13 @@ export function Sidebar() {
       return;
     }
     try {
-      await createWorkspace(renameName.trim(), "", renamingWs.parent_id);
-      await deleteWorkspace(renamingWs.id);
+      // Use renameWorkspace to update in-place — preserves all groups, tabs,
+      // and sub-workspaces associated with the workspace.
+      await api.renameWorkspace(renamingWs.id, renameName.trim());
       setRenamingWs(null);
       setRenameName("");
       setRenameError("");
+      await refreshWorkspaces();
     } catch (e: any) {
       // Name is reserved or duplicate — keep rename form open, show error.
       setRenameError(e?.message || "Cannot use this name");
@@ -370,35 +373,13 @@ export function Sidebar() {
 
       {/* Workspace tree */}
       <div className="sidebar-list">
-        {/* Rename input */}
-        {renamingWs && (
-          <div className="ws-create-form" style={{ marginLeft: renamingWs.parent_id ? 24 : 4 }}>
-            <input
-              placeholder="New name"
-              value={renameName}
-              onChange={(e) => setRenameName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleRenameSubmit();
-                if (e.key === "Escape") setRenamingWs(null);
-              }}
-              autoFocus
-            />
-            <button className="btn btn-accent btn-sm" onClick={handleRenameSubmit}>OK</button>
-            <button className="icon-btn" onClick={() => { setRenamingWs(null); setRenameError(""); }}>
-              <IconX size={14} />
-            </button>
-            {renameError && (
-              <div style={{ width: "100%", fontSize: 11, color: "var(--danger)", marginTop: 2 }}>
-                {renameError}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Workspace items */}
         {flatList.map((item, idx) => {
-          if (!isVisible(item, idx)) return null;
+          // Show item if visible, or if it's the workspace being renamed
+          // (rename input must appear even if parent is collapsed).
+          if (!isVisible(item, idx) && renamingWs?.id !== item.ws.id) return null;
           const isTop = item.ws.parent_id === 0;
+          const isRenaming = renamingWs?.id === item.ws.id;
 
           // Show create form after the anchor workspace:
           // - sub-workspace → after its parent (createParentId)
@@ -408,55 +389,79 @@ export function Sidebar() {
           return (
             <Fragment key={item.ws.id}>
               <div>
-              <div
-                className={`ws-item${currentWsId === item.ws.id ? " selected" : ""}${isTop ? " ws-item-top" : ""}${isCurrentWs(item.ws) ? " ws-item-live" : ""}${dragOverWs?.id === item.ws.id ? " drag-over" : ""}${dragWs?.id === item.ws.id ? " dragging" : ""}`}
-                style={{ paddingLeft: 8 + item.depth * 20 }}
-                draggable={!isCurrentWs(item.ws)}
-                onClick={() => switchWorkspace(item.ws.id)}
-                onDragStart={(e) => handleDragStart(e, item.ws)}
-                onDragOver={(e) => handleDragOver(e, item.ws)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, item.ws)}
-                title={isCurrentWs(item.ws) ? "Auto-tracked — mirrors your live browser tabs" : item.ws.description || item.ws.name}
-              >
-                {/* Toggle arrow for parents */}
-                {item.hasChildren ? (
-                  <span
-                    className={`ws-toggle${collapsed.has(item.ws.id) ? "" : " open"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleCollapse(item.ws.id);
+              {isRenaming ? (
+                <div className="ws-create-form" style={{ paddingLeft: 8 + item.depth * 20 }}>
+                  <input
+                    placeholder="New name"
+                    value={renameName}
+                    onChange={(e) => setRenameName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") handleRenameSubmit();
+                      if (e.key === "Escape") setRenamingWs(null);
                     }}
-                  >
-                    <IconChevronRight size={12} />
-                  </span>
-                ) : (
-                  <span className="ws-toggle-placeholder" />
-                )}
-                {isCurrentWs(item.ws) ? (
-                  <div className="ws-avatar ws-avatar-live" title="Live browser tabs">
-                    <IconMonitor size={14} />
-                  </div>
-                ) : (
-                  <div
-                    className="ws-avatar"
-                    style={{ background: avatarColor(item.ws.name) }}
-                  >
-                    {avatarLetter(item.ws.name)}
-                  </div>
-                )}
-                <span className={`ws-item-name${isCurrentWs(item.ws) ? " ws-item-name-live" : ""}`}>{item.ws.name}</span>
-                {/* ⋮ context menu trigger — hidden for auto-tracked workspace (Opt 20) */}
-                {!isCurrentWs(item.ws) && (
-                  <button
-                    className="ws-menu-trigger"
-                    title="More actions"
-                    onClick={(e) => openContextMenu(e, item.ws)}
-                  >
-                    <IconDots size={12} />
+                    autoFocus
+                  />
+                  <button className="btn btn-accent btn-sm" onClick={handleRenameSubmit}>OK</button>
+                  <button className="icon-btn" onClick={() => { setRenamingWs(null); setRenameError(""); }}>
+                    <IconX size={14} />
                   </button>
-                )}
-              </div>
+                  {renameError && (
+                    <div style={{ width: "100%", fontSize: 11, color: "var(--danger)", marginTop: 2 }}>
+                      {renameError}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div
+                  className={`ws-item${currentWsId === item.ws.id ? " selected" : ""}${isTop ? " ws-item-top" : ""}${isCurrentWs(item.ws) ? " ws-item-live" : ""}${dragOverWs?.id === item.ws.id ? " drag-over" : ""}${dragWs?.id === item.ws.id ? " dragging" : ""}`}
+                  style={{ paddingLeft: 8 + item.depth * 20 }}
+                  draggable={!isCurrentWs(item.ws)}
+                  onClick={() => switchWorkspace(item.ws.id)}
+                  onDragStart={(e) => handleDragStart(e, item.ws)}
+                  onDragOver={(e) => handleDragOver(e, item.ws)}
+                  onDragLeave={handleDragLeave}
+                  onDrop={(e) => handleDrop(e, item.ws)}
+                  title={isCurrentWs(item.ws) ? "Auto-tracked — mirrors your live browser tabs" : item.ws.description || item.ws.name}
+                >
+                  {/* Toggle arrow for parents */}
+                  {item.hasChildren ? (
+                    <span
+                      className={`ws-toggle${collapsed.has(item.ws.id) ? "" : " open"}`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleCollapse(item.ws.id);
+                      }}
+                    >
+                      <IconChevronRight size={12} />
+                    </span>
+                  ) : (
+                    <span className="ws-toggle-placeholder" />
+                  )}
+                  {isCurrentWs(item.ws) ? (
+                    <div className="ws-avatar ws-avatar-live" title="Live browser tabs">
+                      <IconMonitor size={14} />
+                    </div>
+                  ) : (
+                    <div
+                      className="ws-avatar"
+                      style={{ background: avatarColor(item.ws.name) }}
+                    >
+                      {avatarLetter(item.ws.name)}
+                    </div>
+                  )}
+                  <span className={`ws-item-name${isCurrentWs(item.ws) ? " ws-item-name-live" : ""}`}>{item.ws.name}</span>
+                  {/* ⋮ context menu trigger — hidden for auto-tracked workspace (Opt 20) */}
+                  {!isCurrentWs(item.ws) && (
+                    <button
+                      className="ws-menu-trigger"
+                      title="More actions"
+                      onClick={(e) => openContextMenu(e, item.ws)}
+                    >
+                      <IconDots size={12} />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             {/* Create form — appears below anchor workspace */}
             {showCreateHere && (
