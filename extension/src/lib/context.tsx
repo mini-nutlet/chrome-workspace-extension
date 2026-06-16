@@ -305,56 +305,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
       // window's active tab with the ACTIVE badge.
       const allOpenTabs = await chrome.tabs.query({});
 
-      const openChromeIds = new Set(
-        allOpenTabs.map((tab) => tab.id).filter((id): id is number => id != null)
-      );
-      const activeChromeIds = new Set(
-        allOpenTabs.filter((tab) => tab.active).map((tab) => tab.id).filter((id): id is number => id != null)
+      // Only consider navigable (http/https) browser tabs for matching.
+      // Extension pages and chrome:// URLs must never be counted as "open".
+      const navigableTabs = allOpenTabs.filter(
+        (t) => t.url && (t.url.startsWith("http://") || t.url.startsWith("https://")),
       );
 
-      // Normalize URLs for cross-tab matching: strip www., hash, trailing slash.
+      // Normalize URLs for cross-tab matching.
+      // Strips: hash, www., trailing slash, and normalizes https→http
+      // so that protocol redirects don't break is_open matching.
       const normUrl = (u: string) => {
         try {
           const p = new URL(u);
+          if (p.protocol !== "http:" && p.protocol !== "https:") return "";
           p.hash = "";
+          p.protocol = "http:";
           p.hostname = p.hostname.replace(/^www\./, "");
           if (p.pathname.endsWith("/") && p.pathname.length > 1) {
             p.pathname = p.pathname.slice(0, -1);
           }
           return p.toString();
-        } catch { return u; }
+        } catch { return ""; }
       };
 
-      const openUrls = new Set(
-        allOpenTabs.filter((tab) => tab.url).map((tab) => normUrl(tab.url!))
-      );
+      const openUrls = new Set(navigableTabs.map((t) => normUrl(t.url!)));
       const activeUrls = new Set(
-        allOpenTabs.filter((tab) => tab.active && tab.url).map((tab) => normUrl(tab.url!))
+        navigableTabs.filter((t) => t.active).map((t) => normUrl(t.url!)),
       );
-      // Count normalised URLs across all open tabs (for dupe badge).
-      // Use the same normUrl as openUrls/activeUrls so that stored-tab
-      // URLs differing only in trailing slash / www / hash still match.
+      // Count normalised URLs across all navigable open tabs (for dupe badge).
       const urlCount = new Map<string, number>();
-      for (const t of allOpenTabs) {
-        if (t.url) {
-          const key = normUrl(t.url);
-          urlCount.set(key, (urlCount.get(key) ?? 0) + 1);
-        }
+      for (const t of navigableTabs) {
+        const key = normUrl(t.url!);
+        urlCount.set(key, (urlCount.get(key) ?? 0) + 1);
       }
 
       for (const group of tree.groups) {
         for (const tab of group.tabs) {
           const tabNorm = normUrl(tab.url);
-          tab.is_open = openUrls.has(tabNorm);
-          tab.active = activeUrls.has(tabNorm);
-          tab.open_count = urlCount.get(tabNorm) ?? 0;
+          tab.is_open = tabNorm ? openUrls.has(tabNorm) : false;
+          tab.active = tabNorm ? activeUrls.has(tabNorm) : false;
+          tab.open_count = tabNorm ? (urlCount.get(tabNorm) ?? 0) : 0;
         }
       }
       for (const tab of tree.ungrouped_tabs) {
         const tabNorm = normUrl(tab.url);
-        tab.is_open = openUrls.has(tabNorm);
-        tab.active = activeUrls.has(tabNorm);
-        tab.open_count = urlCount.get(tabNorm) ?? 0;
+        tab.is_open = tabNorm ? openUrls.has(tabNorm) : false;
+        tab.active = tabNorm ? activeUrls.has(tabNorm) : false;
+        tab.open_count = tabNorm ? (urlCount.get(tabNorm) ?? 0) : 0;
       }
 
       setTree(tree);
@@ -428,31 +425,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // Cross-reference search results with live browser state.
   const crossRefResults = async (items: SearchResult[]) => {
     const allOpenTabs = await chrome.tabs.query({});
-    const openChromeIds = new Set(allOpenTabs.map(t => t.id).filter((id): id is number => id != null));
-    const activeChromeIds = new Set(
-      allOpenTabs.filter(t => t.active).map(t => t.id).filter((id): id is number => id != null)
+    const navigableTabs = allOpenTabs.filter(
+      (t) => t.url && (t.url.startsWith("http://") || t.url.startsWith("https://")),
     );
     const normUrl = (u: string) => {
       try {
-        const p = new URL(u); p.hash = ""; p.hostname = p.hostname.replace(/^www\./, "");
+        const p = new URL(u);
+        if (p.protocol !== "http:" && p.protocol !== "https:") return "";
+        p.hash = "";
+        p.protocol = "http:";
+        p.hostname = p.hostname.replace(/^www\./, "");
         if (p.pathname.endsWith("/") && p.pathname.length > 1) p.pathname = p.pathname.slice(0, -1);
         return p.toString();
-      } catch { return u; }
+      } catch { return ""; }
     };
-    const openUrls = new Set(allOpenTabs.filter(t => t.url).map(t => normUrl(t.url!)));
-    const activeUrls = new Set(allOpenTabs.filter(t => t.active && t.url).map(t => normUrl(t.url!)));
+    const openUrls = new Set(navigableTabs.map(t => normUrl(t.url!)));
+    const activeUrls = new Set(navigableTabs.filter(t => t.active).map(t => normUrl(t.url!)));
     const urlCount = new Map<string, number>();
-    for (const t of allOpenTabs) {
-      if (t.url) {
-        urlCount.set(t.url, (urlCount.get(t.url) ?? 0) + 1);
-      }
+    for (const t of navigableTabs) {
+      const key = normUrl(t.url!);
+      urlCount.set(key, (urlCount.get(key) ?? 0) + 1);
     }
     for (const item of items) {
       if (item.kind === "tab") {
         const n = normUrl(item.url);
-        (item as any).is_open = openUrls.has(n);
-        item.active = activeUrls.has(n);
-        (item as any).open_count = urlCount.get(item.url) ?? 0;
+        (item as any).is_open = n ? openUrls.has(n) : false;
+        item.active = n ? activeUrls.has(n) : false;
+        (item as any).open_count = n ? (urlCount.get(n) ?? 0) : 0;
       }
     }
     return items;
@@ -811,6 +810,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setHasSession(false);
   }, [currentWsId]);
   const navigate = useCallback(async (url: string, kind: string, existingTabId?: number) => {
+    // Reject non-navigable URLs — chrome-extension://, chrome://, etc.
+    // would create blank placeholder tabs in the workspace UI.
+    if (!url.startsWith("http://") && !url.startsWith("https://")) {
+      console.warn("[navigate] Rejected non-navigable URL:", url);
+      return;
+    }
+
     // Helper: optimistically mark the given URL as active and open in the tree.
     // Uses aggressive normalisation for consistency with DB dedup and dupe detection.
     const markActive = (targetUrl: string) => {
