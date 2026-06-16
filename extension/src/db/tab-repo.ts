@@ -1,4 +1,5 @@
 import { getDb, now, hashUrl, hashUrlWithRules, loadSimilarityRules, type SimilarityRule, type TabRow, type TabWorkspaceRow } from "./database";
+import { CURRENT_WS_NAME } from "./workspace-repo";
 
 export interface Tab {
   id: number;
@@ -463,17 +464,82 @@ export async function getTab(id: number): Promise<Tab | null> {
 }
 
 /** Update an existing tab row's windowId / chromeTabId (e.g. after the
- *  user reopens a closed snapshot tab).  Bypasses URL dedup — the caller
- *  already knows which row to update. */
-export async function updateTabWindow(id: number, windowId: number, chromeTabId: number, title: string, url: string): Promise<void> {
+ *  user reopens a closed snapshot tab).  Only updates the live-tab
+ *  coordinates and timestamp — title, url, and urlHash are preserved
+ *  from the saved snapshot so that re-opening a closed tab never
+ *  overwrites the original saved content. */
+export async function updateTabWindow(id: number, windowId: number, chromeTabId: number, _title?: string, _url?: string): Promise<void> {
   const db = await getDb();
   const row = await db.get("tabs", id);
   if (!row) return;
   row.windowId = windowId;
   row.chromeTabId = chromeTabId;
-  row.title = title;
-  row.url = url;
-  row.urlHash = hashUrl(url);
   row.updatedAt = now();
   await db.put("tabs", row);
+}
+
+// ── Dashboard statistics ──────────────────────────────────────────
+
+async function getCurrentWorkspaceId(): Promise<number | null> {
+  const db = await getDb();
+  const all = await db.getAll("workspaces");
+  const cur = all.find((w: any) => w.name === CURRENT_WS_NAME && w.parentId === 0);
+  return cur?.id ?? null;
+}
+
+/** Count tabs across all user workspaces (excludes the auto-tracked "Open Tabs" workspace). */
+export async function countAllTabs(): Promise<number> {
+  const db = await getDb();
+  const curId = await getCurrentWorkspaceId();
+  const allTw = await db.getAll("tabWorkspaces");
+  let count = 0;
+  for (const tw of allTw) {
+    if (curId != null && (tw as any).workspaceId === curId) continue;
+    count++;
+  }
+  return count;
+}
+
+/** Count duplicate tabs (same urlHash appearing in multiple tab rows). */
+export async function countDuplicateTabs(): Promise<number> {
+  const db = await getDb();
+  const allTabs = await db.getAll("tabs");
+  const hashCount = new Map<string, number>();
+  for (const t of allTabs) {
+    const h = (t as any).urlHash || "";
+    if (!h) continue;
+    hashCount.set(h, (hashCount.get(h) ?? 0) + 1);
+  }
+  let dupes = 0;
+  for (const count of hashCount.values()) {
+    if (count > 1) dupes += count - 1;
+  }
+  return dupes;
+}
+
+/** Count currently-open browser tabs with navigable URLs. */
+export async function countActiveBrowserTabs(): Promise<number> {
+  const allTabs = await chrome.tabs.query({});
+  let count = 0;
+  for (const t of allTabs) {
+    if (t.url && (t.url.startsWith("http://") || t.url.startsWith("https://"))) count++;
+  }
+  return count;
+}
+
+/** Return the top N domains by tab count across all workspaces. */
+export async function topDomains(limit = 5): Promise<{ domain: string; count: number }[]> {
+  const db = await getDb();
+  const allTabs = await db.getAll("tabs");
+  const domainCount = new Map<string, number>();
+  for (const t of allTabs) {
+    try {
+      const host = new URL((t as any).url).hostname.replace(/^www\./i, "").toLowerCase();
+      domainCount.set(host, (domainCount.get(host) ?? 0) + 1);
+    } catch { /* skip invalid URLs */ }
+  }
+  return [...domainCount.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([domain, count]) => ({ domain, count }));
 }

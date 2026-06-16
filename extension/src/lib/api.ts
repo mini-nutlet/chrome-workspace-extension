@@ -5,7 +5,7 @@
 import type { Workspace, Tab, TabGroup, TabGroupTree, AutoGroupRule, SearchResult, DuplicateCheck, Session } from "./types";
 
 import { listWorkspaces as dbListWs, createWorkspace as dbCreateWs, updateWorkspace, deleteWorkspace as dbDeleteWs, reorderWorkspaces as dbReorderWs } from "../db/workspace-repo";
-import { upsertTab as dbUpsertTab, removeTab as dbRemoveTab, listTabsByWorkspace as dbListTabsByWs, findDuplicate as dbFindDup, setTabGroup as dbSetGroup, syncActiveByUrl as dbSyncActiveByUrl, syncActiveToAllWorkspaces, updateTabWindow as dbUpdateTabWindow } from "../db/tab-repo";
+import { upsertTab as dbUpsertTab, removeTab as dbRemoveTab, listTabsByWorkspace as dbListTabsByWs, findDuplicate as dbFindDup, setTabGroup as dbSetGroup, syncActiveByUrl as dbSyncActiveByUrl, syncActiveToAllWorkspaces, updateTabWindow as dbUpdateTabWindow, countAllTabs as dbCountAllTabs, countDuplicateTabs as dbCountDuplicateTabs, countActiveBrowserTabs as dbCountActiveBrowserTabs, topDomains as dbTopDomains } from "../db/tab-repo";
 import { listGroups, createTabGroup as dbCreateGroup, updateTabGroup as dbUpdateGroup, deleteTabGroup as dbDeleteGroup, reorderGroups as dbReorderGroups, getTabGroupTree as dbGetTree } from "../db/tabgroup-repo";
 import { listBookmarks as dbListBm, createBookmark as dbCreateBm, deleteBookmark as dbDeleteBm } from "../db/bookmark-repo";
 import { saveSession as dbSaveSession, restoreSession as dbRestoreSession, deleteSession as dbDeleteSession } from "../db/session-repo";
@@ -43,7 +43,14 @@ export async function removeTab(windowId: number, chromeTabId: number, currentWo
 export async function findDuplicate(url: string): Promise<DuplicateCheck> { return dbFindDup(url); }
 export async function setTabGroup(tabId: number, groupId: number, workspaceId: number): Promise<void> { return dbSetGroup(tabId, workspaceId, groupId); }
 export async function syncActiveByUrl(url: string): Promise<void> { return dbSyncActiveByUrl(url); }
-export async function updateTabWindow(id: number, windowId: number, chromeTabId: number, title: string, url: string): Promise<void> { return dbUpdateTabWindow(id, windowId, chromeTabId, title, url); }
+export async function updateTabWindow(id: number, windowId: number, chromeTabId: number, title?: string, url?: string): Promise<void> { return dbUpdateTabWindow(id, windowId, chromeTabId, title, url); }
+
+// ── Dashboard statistics ────────────────────────────────────────────
+
+export async function countAllTabs(): Promise<number> { return dbCountAllTabs(); }
+export async function countDuplicateTabs(): Promise<number> { return dbCountDuplicateTabs(); }
+export async function countActiveBrowserTabs(): Promise<number> { return dbCountActiveBrowserTabs(); }
+export async function topDomains(limit = 5): Promise<{ domain: string; count: number }[]> { return dbTopDomains(limit); }
 
 // ── Tab Group ──────────────────────────────────────────────────────
 
