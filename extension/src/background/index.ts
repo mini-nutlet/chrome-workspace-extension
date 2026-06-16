@@ -218,8 +218,11 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 });
 
 // ── Side Panel ─────────────────────────────────────────────────────
-// Side panel is opened programmatically via keyboard shortcut (Ctrl+Shift+K).
-// The toolbar icon now opens a popup instead (see manifest action.default_popup).
+// Explicitly disable side-panel-on-action-click.  Chrome persists the
+// previous setPanelBehavior(true) setting across extension updates, so
+// without this explicit false the toolbar icon keeps opening the side
+// panel instead of the popup declared in manifest.json.
+chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }).catch(() => {});
 
 // ── Keyboard Commands ───────────────────────────────────────────────
 
@@ -227,19 +230,6 @@ chrome.commands.onCommand.addListener((command) => {
   if (command === "quick-search") {
     // Focus the search bar in the side panel or newtab page.
     chrome.runtime.sendMessage({ type: "focus-search" }).catch(() => {});
-  }
-  if (command === "switch-workspace") {
-    (async () => {
-      // Open the side panel on the last focused window.
-      try {
-        const win = await chrome.windows.getLastFocused();
-        if (win.id != null) {
-          // chrome.sidePanel.open() expects { windowId: number }
-          (chrome.sidePanel as any).open({ windowId: win.id });
-        }
-      } catch { /* side panel may already be open */ }
-      chrome.runtime.sendMessage({ type: "focus-search" }).catch(() => {});
-    })().catch(() => {});
   }
   if (command === "save-session") {
     (async () => {
@@ -310,24 +300,10 @@ chrome.commands.onCommand.addListener((command) => {
       }
     })().catch(() => {});
   }
-  if (command === "toggle-duplicate-detection") {
-    (async () => {
-      try {
-        const stored = await chrome.storage.local.get("duplicateDetectionEnabled");
-        const current = stored.duplicateDetectionEnabled !== false; // default enabled
-        const next = !current;
-        await chrome.storage.local.set({ duplicateDetectionEnabled: next });
-        await chrome.notifications.create(`dup-toggle-${Date.now()}`, {
-          type: "basic",
-          iconUrl: "icons/icon48.png",
-          title: "Duplicate Detection",
-          message: next ? "Duplicate detection ENABLED" : "Duplicate detection DISABLED",
-        });
-        chrome.runtime.sendMessage({ type: "dup-detection-changed", enabled: next }).catch(() => {});
-      } catch (err) {
-        console.warn("[workspace-bg] toggle-duplicate-detection failed:", err);
-      }
-    })().catch(() => {});
+  if (command === "open-popup") {
+    // chrome.action.openPopup() requires a user gesture — a keyboard
+    // shortcut satisfies this requirement.
+    chrome.action.openPopup().catch(() => {});
   }
 });
 

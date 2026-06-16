@@ -18,7 +18,7 @@ export function DashboardStats() {
         api.countAllTabs(),
         api.countDuplicateTabs(),
         api.countActiveBrowserTabs(),
-        api.topDomains(5),
+        api.topDomains(3),
       ]);
       if (!cancelledRef.current) {
         setStats({ totalTabs, duplicateTabs, activeBrowserTabs, topDomains });

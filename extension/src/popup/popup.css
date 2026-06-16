@@ -1,0 +1,25 @@
+/* Popup-specific sizing — Chrome popups need explicit dimensions */
+html {
+  width: 780px;
+  min-width: 780px;
+  height: 600px;
+  min-height: 600px;
+}
+
+body {
+  width: 780px;
+  min-width: 780px;
+  height: 600px;
+  min-height: 600px;
+}
+
+#root {
+  width: 780px;
+  height: 600px;
+}
+
+/* Override: in popup context, use fixed height instead of 100vh */
+.app-layout,
+.app-layout.sidebar-collapsed {
+  height: 600px;
+}
