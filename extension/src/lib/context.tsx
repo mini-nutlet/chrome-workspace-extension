@@ -101,6 +101,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // tabs-changed racing with initial load, etc.).
   const liveTreeGen = useRef(0);
 
+  // Tracks whether the one-shot auto-selection has already fired.
+  // Prevents the effect from re-selecting a workspace when the user
+  // deliberately navigates to the dashboard (currentWsId = 0).
+  const initialSelectionDone = useRef(false);
+
   // ── theme ──────────────────────────────────────────────────────────
   useEffect(() => {
     chrome.storage.local.get("theme", (r) => {
@@ -375,25 +380,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshRules();
   }, []);
 
-  // Once workspaces are loaded, restore the last selection or auto-select
-  // the auto-tracked workspace so the UI immediately shows live browser tabs.
+  // Once workspaces are loaded, restore the last-selected workspace from
+  // storage.  If nothing was saved (first install or user was on the
+  // dashboard), stay on the dashboard (currentWsId = 0) so the user sees
+  // the stats overview and workspace cards.
+  // Only fires once — after that, the user controls navigation via the
+  // sidebar (click a workspace) or the Home button (dashboard).
   useEffect(() => {
     if (workspaces.length === 0) return;
-    if (currentWsId > 0) return; // already selected
+    if (initialSelectionDone.current) return;
 
     chrome.storage.local.get("currentWorkspaceId", (r) => {
+      if (initialSelectionDone.current) return; // guard against double-fire
       const stored = (r.currentWorkspaceId as number) || 0;
       if (stored > 0 && workspaces.some((w) => w.id === stored)) {
         setCurrentWsId(stored);
-      } else {
-        const cur = workspaces.find((w) => w.name === CURRENT_WS_NAME && w.parent_id === 0);
-        if (cur) {
-          setCurrentWsId(cur.id);
-          chrome.storage.local.set({ currentWorkspaceId: cur.id });
-        }
       }
+      // If stored is 0 or invalid, stay on the dashboard — don't force
+      // navigate to Open Tabs.
+      initialSelectionDone.current = true;
     });
-  }, [workspaces, currentWsId]);
+  }, [workspaces]);
 
   // ── data refresh (driven by currentWsId) ─────────────────────────
   // For the Current workspace the tree is built directly from live
@@ -780,7 +787,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 chrome_tab_id: created.id,
                 workspace_id: currentWsId,
                 title: created.title ?? t.title,
-                url: created.url ?? t.url,
+                url: created.url || t.url,
                 active: i === 0,
                 group_id: t.group_id,
                 snapshot: true,
@@ -871,14 +878,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (existingTabId) {
           // Update the existing DB row directly — avoids URL-dedup issues
           // (e.g. http→https redirect producing a different hash).
-          await api.updateTabWindow(existingTabId, tab.windowId, tab.id, tab.title ?? "", tab.url ?? url);
+          await api.updateTabWindow(existingTabId, tab.windowId, tab.id, tab.title ?? "", tab.url || url);
         } else {
           await api.upsertTab({
             window_id: tab.windowId,
             chrome_tab_id: tab.id,
             workspace_id: currentWsId,
             title: tab.title ?? "",
-            url: tab.url ?? url,
+            url: tab.url || url,
             active: true,
           });
         }
