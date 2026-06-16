@@ -4,6 +4,7 @@ import { CURRENT_WS_NAME } from "../db/workspace-repo";
 import { IconMonitor, IconSun, IconMoon, IconSettings, IconSearch, IconLayers, IconWindow, IconSave, IconRefresh, IconTrash, IconX } from "./Icons";
 import { ResultList } from "./ResultList";
 import { GroupedTabList } from "./GroupedTabList";
+import { DashboardStats } from "./DashboardStats";
 
 // ── Sub-workspace card (shown in top-level workspace view) ──────────────
 
@@ -158,74 +159,81 @@ export function MainContent() {
       <div className="main-body">
         {showSearch ? (
           <ResultList results={results} loading={searching} onNavigate={navigate} />
-        ) : currentWsId === 0 ? (
-          /* Current Space — dashboard of top-level workspaces */
-          <div className="current-space-view">
-            <div className="section-header">
-              <h2 className="section-title">Top-Level Workspaces</h2>
-              <span className="section-count">{workspaces.filter((w) => w.parent_id === 0).length}</span>
-            </div>
-            {workspaces.filter((w) => w.parent_id === 0).length === 0 ? (
-              <div className="empty-state">
-                <IconLayers size={48} className="empty-state-icon" />
-                <div className="empty-state-text">No workspaces yet</div>
-                <div className="empty-state-hint">Click + in the sidebar to create your first workspace</div>
-              </div>
-            ) : (
-              <div className="top-ws-grid">
-                {workspaces
-                  .filter((w) => w.parent_id === 0)
-                  .map((ws) => (
-                    <TopLevelWsCard
-                      key={ws.id}
-                      ws={ws}
-                      subCount={workspaces.filter((w) => w.parent_id === ws.id).length}
-                      onClick={() => switchWorkspace(ws.id)}
-                    />
-                  ))}
-              </div>
-            )}
-          </div>
-        ) : isCurrent ? (
-          /* Current workspace — auto-captures tabs, no sub-workspaces */
-          <GroupedTabList isCurrent />
-        ) : isTopLevel && !isCurrent ? (
-          /* Top-level workspace (non-Current) — show sub-workspaces */
-          <div className="top-level-view">
-            <div className="section-header">
-              <h2 className="section-title">Sub Workspaces</h2>
-              <span className="section-count">{subWorkspaces.length}</span>
-            </div>
-            {subWorkspaces.length === 0 ? (
-              <div className="empty-state">
-                <IconLayers size={48} className="empty-state-icon" />
-                <div className="empty-state-text">No sub-workspaces</div>
-                <div className="empty-state-hint">Right-click this workspace to add sub-workspaces</div>
-              </div>
-            ) : (
-              <div className="sub-ws-grid">
-                {subWorkspaces.map((ws) => (
-                  <SubWorkspaceCard
-                    key={ws.id}
-                    ws={ws}
-                    onClick={() => switchWorkspace(ws.id)}
-                  />
-                ))}
-              </div>
-            )}
-            {/* Also show tabs directly in the top-level workspace */}
-            <GroupedTabList />
-          </div>
-        ) : isSubLevel ? (
-          /* Sub-level workspace — show groups + tabs */
-          <GroupedTabList />
         ) : (
-          /* Fallback empty state */
-          <div className="empty-state">
-            <IconLayers size={48} className="empty-state-icon" />
-            <div className="empty-state-text">Select a workspace</div>
-            <div className="empty-state-hint">Choose a workspace from the sidebar to view its tabs</div>
-          </div>
+          <>
+            {currentWsId === 0 ? (
+              /* Current Space — dashboard of top-level workspaces */
+              <div className="current-space-view">
+                <div className="section-header">
+                  <h2 className="section-title">Top-Level Workspaces</h2>
+                  <span className="section-count">{workspaces.filter((w) => w.parent_id === 0).length}</span>
+                </div>
+                {workspaces.filter((w) => w.parent_id === 0).length === 0 ? (
+                  <div className="empty-state">
+                    <IconLayers size={48} className="empty-state-icon" />
+                    <div className="empty-state-text">No workspaces yet</div>
+                    <div className="empty-state-hint">Click + in the sidebar to create your first workspace</div>
+                  </div>
+                ) : (
+                  <div className="top-ws-grid">
+                    {workspaces
+                      .filter((w) => w.parent_id === 0)
+                      .map((ws) => (
+                        <TopLevelWsCard
+                          key={ws.id}
+                          ws={ws}
+                          subCount={workspaces.filter((w) => w.parent_id === ws.id).length}
+                          onClick={() => switchWorkspace(ws.id)}
+                        />
+                      ))}
+                  </div>
+                )}
+              </div>
+            ) : isCurrent ? (
+              /* Open Tabs — auto-captured live tabs with dashboard stats */
+              <>
+                <DashboardStats />
+                <GroupedTabList isCurrent />
+              </>
+            ) : isTopLevel && !isCurrent ? (
+              /* Top-level workspace (non-Current) — show sub-workspaces */
+              <div className="top-level-view">
+                <div className="section-header">
+                  <h2 className="section-title">Sub Workspaces</h2>
+                  <span className="section-count">{subWorkspaces.length}</span>
+                </div>
+                {subWorkspaces.length === 0 ? (
+                  <div className="empty-state">
+                    <IconLayers size={48} className="empty-state-icon" />
+                    <div className="empty-state-text">No sub-workspaces</div>
+                    <div className="empty-state-hint">Right-click this workspace to add sub-workspaces</div>
+                  </div>
+                ) : (
+                  <div className="sub-ws-grid">
+                    {subWorkspaces.map((ws) => (
+                      <SubWorkspaceCard
+                        key={ws.id}
+                        ws={ws}
+                        onClick={() => switchWorkspace(ws.id)}
+                      />
+                    ))}
+                  </div>
+                )}
+                {/* Also show tabs directly in the top-level workspace */}
+                <GroupedTabList />
+              </div>
+            ) : isSubLevel ? (
+              /* Sub-level workspace — show groups + tabs */
+              <GroupedTabList />
+            ) : (
+              /* Fallback empty state */
+              <div className="empty-state">
+                <IconLayers size={48} className="empty-state-icon" />
+                <div className="empty-state-text">Select a workspace</div>
+                <div className="empty-state-hint">Choose a workspace from the sidebar to view its tabs</div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

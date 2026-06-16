@@ -775,6 +775,14 @@ input::placeholder { color: var(--text-tertiary); }
   white-space: nowrap;
 }
 
+.search-highlight {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 600;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 /* ── Workspace actions ──────────────────────────────────── */
 
 .ws-actions {
@@ -1417,6 +1425,90 @@ body {
   background: var(--surface);
   padding: 2px 8px;
   border-radius: 10px;
+}
+
+/* ── Dashboard Stats ────────────────────────────────────── */
+
+.dashboard-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 28px;
+}
+
+@media (max-width: 700px) {
+  .dashboard-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-card-value {
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--accent);
+  line-height: 1.1;
+}
+
+.stat-card-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.stat-card-domain-list {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stat-card-domain-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.stat-card-domain-rank {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--accent-light);
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.stat-card-domain-name {
+  flex: 1;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.stat-card-domain-count {
+  color: var(--text-tertiary);
+  font-weight: 500;
+}
+
+.stat-card-domain-empty {
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 /* ── Top-level workspace cards (Opt 11) ──────────────────── */

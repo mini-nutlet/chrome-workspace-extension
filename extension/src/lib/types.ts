@@ -76,6 +76,7 @@ export interface SearchResult {
   group_id?: number;
   active?: boolean;
   rank: number;
+  match_indices?: Array<{ start: number; end: number }>;
 }
 
 export interface DuplicateCheck {

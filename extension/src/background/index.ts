@@ -4,7 +4,8 @@
 import * as api from "../lib/api";
 import { syncActiveToAllWorkspaces } from "../db/tab-repo";
 import { CURRENT_WS_NAME, migrateCurrentWsName } from "../db/workspace-repo";
-import { loadSimilarityRules, findRule, type SimilarityRule } from "../db/database";
+import { loadSimilarityRules, findRule, hashUrl, type SimilarityRule } from "../db/database";
+import { saveSession } from "../db/session-repo";
 
 const NEWTAB_URL = "chrome://newtab/";
 
@@ -77,6 +78,10 @@ async function removeTab(windowId: number, tabId: number): Promise<void> {
 // ── Duplicate Detection ────────────────────────────────────────────
 
 async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> {
+  // Respect the duplicate-detection toggle set via keyboard shortcut.
+  const stored = await chrome.storage.local.get("duplicateDetectionEnabled");
+  if (stored.duplicateDetectionEnabled === false) return false;
+
   if (!isNavigable(tab.url) || tab.id == null) return false;
 
   const data = await api.findDuplicate(tab.url!);
@@ -213,8 +218,8 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
 });
 
 // ── Side Panel ─────────────────────────────────────────────────────
-
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+// Side panel is opened programmatically via keyboard shortcut (Ctrl+Shift+K).
+// The toolbar icon now opens a popup instead (see manifest action.default_popup).
 
 // ── Keyboard Commands ───────────────────────────────────────────────
 
@@ -222,6 +227,107 @@ chrome.commands.onCommand.addListener((command) => {
   if (command === "quick-search") {
     // Focus the search bar in the side panel or newtab page.
     chrome.runtime.sendMessage({ type: "focus-search" }).catch(() => {});
+  }
+  if (command === "switch-workspace") {
+    (async () => {
+      // Open the side panel on the last focused window.
+      try {
+        const win = await chrome.windows.getLastFocused();
+        if (win.id != null) {
+          // chrome.sidePanel.open() expects { windowId: number }
+          (chrome.sidePanel as any).open({ windowId: win.id });
+        }
+      } catch { /* side panel may already be open */ }
+      chrome.runtime.sendMessage({ type: "focus-search" }).catch(() => {});
+    })().catch(() => {});
+  }
+  if (command === "save-session") {
+    (async () => {
+      try {
+        // Read the active workspace ID from storage (set by the UI).
+        const stored = await chrome.storage.local.get("currentWorkspaceId");
+        let wsId: number = (stored.currentWorkspaceId as number) ?? 0;
+        if (wsId <= 0) wsId = await ensureCurrentWorkspace();
+        if (wsId <= 0) return;
+
+        // Build the tab list: for the Open Tabs workspace we snapshot
+        // live browser tabs; for other workspaces we read from IndexedDB.
+        let tabs: Array<{
+          id: number; window_id: number; chrome_tab_id: number;
+          workspace_id: number; group_id: number; title: string;
+          url: string; url_hash: string; active: boolean;
+          created_at: string; updated_at: string;
+        }> = [];
+
+        const allWs = await api.listWorkspaces();
+        const currentWs = allWs.find((w) => w.id === wsId);
+        const isCurrent = currentWs?.name === CURRENT_WS_NAME;
+
+        if (isCurrent) {
+          const browserTabs = await chrome.tabs.query({});
+          for (const t of browserTabs) {
+            if (!t.url || (!t.url.startsWith("http://") && !t.url.startsWith("https://"))) continue;
+            tabs.push({
+              id: -(t.id ?? Date.now()),
+              window_id: t.windowId,
+              chrome_tab_id: t.id ?? 0,
+              workspace_id: wsId,
+              group_id: 0,
+              title: t.title ?? "",
+              url: t.url,
+              url_hash: hashUrl(t.url),
+              active: t.active || false,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            });
+          }
+        } else {
+          const dbTabs = await api.listTabs(wsId);
+          tabs = dbTabs.map((t) => ({
+            id: t.id,
+            window_id: t.window_id,
+            chrome_tab_id: t.chrome_tab_id,
+            workspace_id: wsId,
+            group_id: t.group_id,
+            title: t.title,
+            url: t.url,
+            url_hash: t.url_hash,
+            active: t.active,
+            created_at: t.created_at,
+            updated_at: t.updated_at,
+          }));
+        }
+
+        await saveSession(wsId, tabs);
+        await chrome.notifications.create(`session-saved-${Date.now()}`, {
+          type: "basic",
+          iconUrl: "icons/icon48.png",
+          title: "Session Saved",
+          message: `${tabs.length} tabs saved to workspace session.`,
+        });
+      } catch (err) {
+        console.warn("[workspace-bg] save-session failed:", err);
+      }
+    })().catch(() => {});
+  }
+  if (command === "toggle-duplicate-detection") {
+    (async () => {
+      try {
+        const stored = await chrome.storage.local.get("duplicateDetectionEnabled");
+        const current = stored.duplicateDetectionEnabled !== false; // default enabled
+        const next = !current;
+        await chrome.storage.local.set({ duplicateDetectionEnabled: next });
+        await chrome.notifications.create(`dup-toggle-${Date.now()}`, {
+          type: "basic",
+          iconUrl: "icons/icon48.png",
+          title: "Duplicate Detection",
+          message: next ? "Duplicate detection ENABLED" : "Duplicate detection DISABLED",
+        });
+        chrome.runtime.sendMessage({ type: "dup-detection-changed", enabled: next }).catch(() => {});
+      } catch (err) {
+        console.warn("[workspace-bg] toggle-duplicate-detection failed:", err);
+      }
+    })().catch(() => {});
   }
 });
 

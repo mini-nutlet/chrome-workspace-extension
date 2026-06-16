@@ -380,24 +380,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshRules();
   }, []);
 
-  // Once workspaces are loaded, restore the last-selected workspace from
-  // storage.  If nothing was saved (first install or user was on the
-  // dashboard), stay on the dashboard (currentWsId = 0) so the user sees
-  // the stats overview and workspace cards.
+  // Once workspaces are loaded, restore the last selection or auto-select
+  // the auto-tracked "Open Tabs" workspace so the user lands on live
+  // browser tabs with the dashboard stats overview.
   // Only fires once — after that, the user controls navigation via the
-  // sidebar (click a workspace) or the Home button (dashboard).
+  // sidebar or Home button.
   useEffect(() => {
     if (workspaces.length === 0) return;
     if (initialSelectionDone.current) return;
 
     chrome.storage.local.get("currentWorkspaceId", (r) => {
-      if (initialSelectionDone.current) return; // guard against double-fire
+      if (initialSelectionDone.current) return;
       const stored = (r.currentWorkspaceId as number) || 0;
       if (stored > 0 && workspaces.some((w) => w.id === stored)) {
         setCurrentWsId(stored);
+      } else {
+        const cur = workspaces.find((w) => w.name === CURRENT_WS_NAME && w.parent_id === 0);
+        if (cur) setCurrentWsId(cur.id);
       }
-      // If stored is 0 or invalid, stay on the dashboard — don't force
-      // navigate to Open Tabs.
       initialSelectionDone.current = true;
     });
   }, [workspaces]);

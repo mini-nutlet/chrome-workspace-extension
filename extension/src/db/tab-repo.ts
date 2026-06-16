@@ -478,63 +478,65 @@ export async function updateTabWindow(id: number, windowId: number, chromeTabId:
   await db.put("tabs", row);
 }
 
-// ── Dashboard statistics ──────────────────────────────────────────
+// ── Dashboard statistics (live browser state) ─────────────────────
+// All stats are based on chrome.tabs.query() — the live Open Tabs — not
+// IndexedDB, so counts only reflect what is currently open in the browser.
 
-async function getCurrentWorkspaceId(): Promise<number | null> {
-  const db = await getDb();
-  const all = await db.getAll("workspaces");
-  const cur = all.find((w: any) => w.name === CURRENT_WS_NAME && w.parentId === 0);
-  return cur?.id ?? null;
+function isNavigableUrl(url: string | undefined): url is string {
+  if (!url) return false;
+  return url.startsWith("http://") || url.startsWith("https://");
 }
 
-/** Count tabs across all user workspaces (excludes the auto-tracked "Open Tabs" workspace). */
+function normalizeForDedup(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hash = "";
+    u.search = "";
+    u.hostname = u.hostname.replace(/^www\./i, "");
+    if (u.pathname.endsWith("/") && u.pathname.length > 1) u.pathname = u.pathname.slice(0, -1);
+    return u.toString().toLowerCase();
+  } catch { return url; }
+}
+
+async function getNavigableTabs(): Promise<chrome.tabs.Tab[]> {
+  const all = await chrome.tabs.query({});
+  return all.filter((t) => isNavigableUrl(t.url));
+}
+
+/** Count currently-open browser tabs with navigable URLs. */
 export async function countAllTabs(): Promise<number> {
-  const db = await getDb();
-  const curId = await getCurrentWorkspaceId();
-  const allTw = await db.getAll("tabWorkspaces");
-  let count = 0;
-  for (const tw of allTw) {
-    if (curId != null && (tw as any).workspaceId === curId) continue;
-    count++;
-  }
-  return count;
+  const tabs = await getNavigableTabs();
+  return tabs.length;
 }
 
-/** Count duplicate tabs (same urlHash appearing in multiple tab rows). */
+/** Count duplicate tabs among live browser tabs (by normalized URL). */
 export async function countDuplicateTabs(): Promise<number> {
-  const db = await getDb();
-  const allTabs = await db.getAll("tabs");
-  const hashCount = new Map<string, number>();
-  for (const t of allTabs) {
-    const h = (t as any).urlHash || "";
-    if (!h) continue;
-    hashCount.set(h, (hashCount.get(h) ?? 0) + 1);
+  const tabs = await getNavigableTabs();
+  const urlCount = new Map<string, number>();
+  for (const t of tabs) {
+    const key = normalizeForDedup(t.url!);
+    urlCount.set(key, (urlCount.get(key) ?? 0) + 1);
   }
   let dupes = 0;
-  for (const count of hashCount.values()) {
+  for (const count of urlCount.values()) {
     if (count > 1) dupes += count - 1;
   }
   return dupes;
 }
 
-/** Count currently-open browser tabs with navigable URLs. */
+/** Count browser windows. */
 export async function countActiveBrowserTabs(): Promise<number> {
-  const allTabs = await chrome.tabs.query({});
-  let count = 0;
-  for (const t of allTabs) {
-    if (t.url && (t.url.startsWith("http://") || t.url.startsWith("https://"))) count++;
-  }
-  return count;
+  const wins = await chrome.windows.getAll();
+  return wins.length;
 }
 
-/** Return the top N domains by tab count across all workspaces. */
+/** Return the top N domains by tab count among open browser tabs. */
 export async function topDomains(limit = 5): Promise<{ domain: string; count: number }[]> {
-  const db = await getDb();
-  const allTabs = await db.getAll("tabs");
+  const tabs = await getNavigableTabs();
   const domainCount = new Map<string, number>();
-  for (const t of allTabs) {
+  for (const t of tabs) {
     try {
-      const host = new URL((t as any).url).hostname.replace(/^www\./i, "").toLowerCase();
+      const host = new URL(t.url!).hostname.replace(/^www\./i, "").toLowerCase();
       domainCount.set(host, (domainCount.get(host) ?? 0) + 1);
     } catch { /* skip invalid URLs */ }
   }
