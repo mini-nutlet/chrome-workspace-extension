@@ -204,7 +204,30 @@ export async function importAllData(data: ExportData): Promise<void> {
   const toSet: Record<string, unknown> = {};
   if (theme !== undefined) toSet.theme = theme;
   if (similarityRules !== undefined) toSet.similarityRules = similarityRules;
-  if (currentWorkspaceId !== undefined) toSet.currentWorkspaceId = currentWorkspaceId;
+
+  // Restore the auto-tracking "Open Tabs" workspace — it is always
+  // excluded from exports, so an import would otherwise leave the
+  // extension without its live-tab mirror.  Recreate it here so the
+  // UI immediately shows browser tabs after import.
+  const allWs = await db.getAll("workspaces") as WorkspaceRow[];
+  const hasCurrent = allWs.some(
+    (w) => w.name === CURRENT_WS_NAME && w.parentId === 0,
+  );
+  if (!hasCurrent) {
+    const newId = await db.add("workspaces", {
+      parentId: 0,
+      sortOrder: 0,
+      name: CURRENT_WS_NAME,
+      description: "Auto-tracked tabs",
+      icon: "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    toSet.currentWorkspaceId = newId as number;
+  } else if (currentWorkspaceId !== undefined) {
+    toSet.currentWorkspaceId = currentWorkspaceId;
+  }
+
   if (Object.keys(toSet).length > 0) {
     await chrome.storage.local.set(toSet);
   }
