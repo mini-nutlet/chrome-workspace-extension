@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { AutoGroupRule, SimilarityRule, SimRuleType, SimPatternType } from "../lib/types";
 import type { Theme } from "../lib/context";
 import * as api from "../lib/api";
-import { IconPlus, IconEdit, IconTrash, IconMonitor, IconSun, IconMoon, IconSettings } from "../components/Icons";
+import { IconPlus, IconEdit, IconTrash, IconMonitor, IconSun, IconMoon, IconSettings, IconDownload, IconUpload } from "../components/Icons";
 
 // ── Similarity rule helpers ─────────────────────────────────────────────
 
@@ -24,7 +24,7 @@ function newSimRule(): SimilarityRule {
   };
 }
 
-type SectionKey = "theme" | "simRules" | "autoGroup";
+type SectionKey = "theme" | "simRules" | "autoGroup" | "dataMgmt";
 
 export function SettingsApp() {
   const [rules, setRules] = useState<AutoGroupRule[]>([]);
@@ -122,6 +122,52 @@ export function SettingsApp() {
   const handleRunAutoGroup = async () => {
     const result = await api.runAutoGroup();
     alert(`Grouped ${result.grouped_count} tabs`);
+  };
+
+  // ── Export / Import ──────────────────────────────────────────
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importing, setImporting] = useState(false);
+
+  const handleExport = async () => {
+    try {
+      await api.exportData();
+    } catch (e) {
+      alert(`Export failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    }
+  };
+
+  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setImporting(true);
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      if (!api.validateExportFormat(data)) {
+        alert("Invalid export file. The file is not a valid Workspace Companion backup.");
+        return;
+      }
+
+      if (!confirm(
+        "This will replace ALL existing workspaces, tabs, bookmarks, and settings. " +
+        "This action cannot be undone.\n\nContinue with import?"
+      )) {
+        return;
+      }
+
+      await api.importData(text);
+      alert("Data imported successfully. The page will reload to apply changes.");
+      window.location.reload();
+    } catch (e) {
+      alert(`Import failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+    } finally {
+      setImporting(false);
+      // Reset file input so the same file can be re-selected
+      e.target.value = "";
+    }
   };
 
   return (
@@ -371,6 +417,54 @@ export function SettingsApp() {
           </div>
         </div>
         </>
+        )}
+      </section>
+
+      {/* Data Management */}
+      <section style={{ marginBottom: 32 }}>
+        <h2
+          onClick={() => toggleSection("dataMgmt")}
+          style={{
+            fontSize: 14, fontWeight: 600, marginBottom: isCollapsed("dataMgmt") ? 0 : 10,
+            color: "var(--text-secondary)", cursor: "pointer", userSelect: "none",
+            display: "flex", alignItems: "center", gap: 6,
+          }}
+        >
+          <span style={{ display: "inline-block", transition: "transform 0.15s", transform: isCollapsed("dataMgmt") ? "rotate(-90deg)" : "rotate(0deg)", fontSize: 10 }}>▼</span>
+          Data Management
+        </h2>
+        {!isCollapsed("dataMgmt") && (
+        <div className="card" style={{ overflow: "hidden" }}>
+          <div style={{ padding: 16, display: "flex", flexDirection: "column", gap: 12 }}>
+            <p style={{ fontSize: 12, color: "var(--text-tertiary)", lineHeight: 1.6 }}>
+              Export all workspaces, tabs, bookmarks, and settings to a JSON backup file.
+              You can later import this file to restore your data or migrate between browsers.
+              <br />
+              <strong style={{ color: "var(--danger)" }}>
+                Importing replaces ALL existing data. Make a backup first.
+              </strong>
+            </p>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-accent btn-sm" onClick={handleExport}>
+                <IconDownload size={12} /> Export Data
+              </button>
+              <button
+                className="btn btn-sm"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importing}
+              >
+                <IconUpload size={12} /> {importing ? "Importing..." : "Import Data"}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                style={{ display: "none" }}
+                onChange={handleFileImport}
+              />
+            </div>
+          </div>
+        </div>
         )}
       </section>
     </div>

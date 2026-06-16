@@ -146,3 +146,19 @@ export async function closeBrowserTabByUrl(url: string): Promise<boolean> {
   if (match && match.id != null) { await chrome.tabs.remove(match.id); return true; }
   return false;
 }
+
+// ── Export / Import ──────────────────────────────────────────────
+
+import { exportAllData, downloadExport, importAllData, validateExportFormat } from "./export-import";
+
+export async function exportData(): Promise<void> {
+  const data = await exportAllData();
+  downloadExport(data);
+}
+
+export async function importData(jsonString: string): Promise<void> {
+  const data = JSON.parse(jsonString);
+  await importAllData(data);
+}
+
+export { validateExportFormat };

@@ -2,6 +2,7 @@ import { createContext, useContext, useState, useEffect, useCallback, useRef, ty
 import type { Workspace, Tab, TabGroupWithTabs, TabGroupTree, AutoGroupRule, SearchResult } from "./types";
 import * as api from "./api";
 import { CURRENT_WS_NAME } from "../db/workspace-repo";
+import { domainToGroupName } from "../db/autogroup-repo";
 
 export type Theme = "system" | "light" | "dark";
 
@@ -188,8 +189,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       rules = ensureArray(await api.listAutoGroupRules());
     } catch { /* use empty rules — all tabs go to Ungrouped */ }
 
-    // Match a URL to an auto-group rule name, or null if no rule matches.
-    const getGroupName = (url: string): string | null => {
+    // Match a URL to a group name: user-defined rules first,
+    // then domain-based grouping as fallback.
+    const getGroupName = (url: string): string => {
       const domain = domainFromUrl(url);
       for (const rule of rules) {
         if (!rule.enabled) continue;
@@ -197,7 +199,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return rule.group_name;
         }
       }
-      return null;
+      // Fallback: group by full hostname with abbreviated display name.
+      return domainToGroupName(domain);
     };
 
     // Build tabs and group them.

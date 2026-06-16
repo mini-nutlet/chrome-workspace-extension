@@ -18,6 +18,84 @@ function toApi(row: AutoGroupRuleRow): AutoGroupRule {
   };
 }
 
+// ── Domain-to-name helper ──────────────────────────────────────────
+
+/**
+ * Convert a hostname to an abbreviated display name for domain-based
+ * grouping.  Strips www. prefix and common TLDs, then applies well-known
+ * mappings (e.g. "docs.google.com" → "Google Docs").
+ * Falls back to capitalising dot-separated segments.
+ */
+export function domainToGroupName(hostname: string): string {
+  let name = hostname.replace(/^www\./i, "").toLowerCase();
+  // Strip common TLDs: .com, .org, .net, .io, .dev, .co, .gov, .edu,
+  // .ai, .app, .me, .info, .biz — optionally with a country suffix.
+  name = name.replace(/\.(com|org|net|io|dev|co|gov|edu|ai|app|me|info|biz)(\.[a-z]{2})?$/i, "");
+
+  const known: Record<string, string> = {
+    "github": "GitHub",
+    "stackoverflow": "Stack Overflow",
+    "youtube": "YouTube",
+    "npmjs": "npm",
+    "medium": "Medium",
+    "google": "Google",
+    "wikipedia": "Wikipedia",
+    "linkedin": "LinkedIn",
+    "gitlab": "GitLab",
+    "bitbucket": "Bitbucket",
+    "notion": "Notion",
+    "figma": "Figma",
+    "reddit": "Reddit",
+    "whatsapp": "WhatsApp",
+    "discord": "Discord",
+    "slack": "Slack",
+    "gmail": "Gmail",
+    "mail.google": "Gmail",
+    "docs.google": "Google Docs",
+    "drive.google": "Google Drive",
+    "calendar.google": "Google Calendar",
+    "meet.google": "Google Meet",
+    "sheets.google": "Google Sheets",
+    "slides.google": "Google Slides",
+    "chat.openai": "ChatGPT",
+    "chatgpt": "ChatGPT",
+    "claude": "Claude",
+    "claude.ai": "Claude",
+    "copilot.microsoft": "Copilot",
+    "outlook.live": "Outlook",
+    "outlook.office": "Outlook",
+    "bing": "Bing",
+    "amazon": "Amazon",
+    "netflix": "Netflix",
+    "spotify": "Spotify",
+    "twitch": "Twitch",
+    "news.ycombinator": "Hacker News",
+    "twitter": "X/Twitter",
+    "x": "X/Twitter",
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "tiktok": "TikTok",
+    "translate.google": "Google Translate",
+    "maps.google": "Google Maps",
+    "photos.google": "Google Photos",
+    "console.cloud.google": "GCP Console",
+    "portal.azure": "Azure Portal",
+    "dev.azure": "Azure DevOps",
+    "docs.rs": "Rust Docs",
+    "crates.io": "Crates.io",
+    "pypi.org": "PyPI",
+    "docs.python": "Python Docs",
+    "developer.mozilla": "MDN",
+    "learn.microsoft": "Microsoft Learn",
+  };
+
+  const key = name.toLowerCase();
+  if (known[key]) return known[key];
+
+  // Default: capitalise each dot-separated segment.
+  return name.split(".").map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join(" ");
+}
+
 const DEFAULT_RULES = [
   ["github.com", "GitHub"],
   ["stackoverflow.com", "Stack Overflow"],
@@ -76,6 +154,23 @@ export async function autoGroupTab(tabId: number, workspaceId: number, urlHash: 
         await setTabGroup(tabId, workspaceId, group.id);
       }
       break;
+    }
+  }
+
+  // Fallback: if no rule matched, group by full hostname with an
+  // abbreviated display name (replaces the old "everything → Ungrouped"
+  // behaviour).
+  const twAfter = (await db.getAll("tabWorkspaces"))
+    .find((r: any) => r.tabId === tabId && r.workspaceId === workspaceId);
+  if (twAfter && twAfter.groupId === 0 && hostname) {
+    const groupName = domainToGroupName(hostname);
+    const groups = await listGroups(workspaceId);
+    let group = groups.find(g => g.name.toLowerCase() === groupName.toLowerCase());
+    if (!group) {
+      group = await createTabGroup(workspaceId, groupName);
+    }
+    if (group && group.id > 0) {
+      await setTabGroup(tabId, workspaceId, group.id);
     }
   }
 }
