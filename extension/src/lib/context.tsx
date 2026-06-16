@@ -293,8 +293,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       // Cross-reference with browser's open and active tabs.
       // The backend status may be stale; the browser is the source of truth.
-      // Match by chrome_tab_id (same tab instance) AND by normalized URL
-      // (same page opened in a different tab — manual, redirect, auto-open).
+      //
+      // Match ONLY by normalized URL — NOT by chrome_tab_id.
+      // When a browser tab navigates to a different URL, the saved
+      // workspace tab is no longer "open" and should appear greyed out.
+      // chrome_tab_id matching would incorrectly keep it alive just
+      // because the same browser tab instance still exists.
       //
       // is_open and active are cross-referenced against ALL open tabs across
       // ALL windows. Chrome reports one active tab per window; we show each
@@ -341,15 +345,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       for (const group of tree.groups) {
         for (const tab of group.tabs) {
           const tabNorm = normUrl(tab.url);
-          tab.is_open = openChromeIds.has(tab.chrome_tab_id) || openUrls.has(tabNorm);
-          tab.active = activeChromeIds.has(tab.chrome_tab_id) || activeUrls.has(tabNorm);
+          tab.is_open = openUrls.has(tabNorm);
+          tab.active = activeUrls.has(tabNorm);
           tab.open_count = urlCount.get(tabNorm) ?? 0;
         }
       }
       for (const tab of tree.ungrouped_tabs) {
         const tabNorm = normUrl(tab.url);
-        tab.is_open = openChromeIds.has(tab.chrome_tab_id) || openUrls.has(tabNorm);
-        tab.active = activeChromeIds.has(tab.chrome_tab_id) || activeUrls.has(tabNorm);
+        tab.is_open = openUrls.has(tabNorm);
+        tab.active = activeUrls.has(tabNorm);
         tab.open_count = urlCount.get(tabNorm) ?? 0;
       }
 
@@ -446,8 +450,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     for (const item of items) {
       if (item.kind === "tab") {
         const n = normUrl(item.url);
-        (item as any).is_open = openChromeIds.has((item as any).chrome_tab_id) || openUrls.has(n);
-        item.active = activeChromeIds.has((item as any).chrome_tab_id) || activeUrls.has(n);
+        (item as any).is_open = openUrls.has(n);
+        item.active = activeUrls.has(n);
         (item as any).open_count = urlCount.get(item.url) ?? 0;
       }
     }
@@ -591,10 +595,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (allUrls.length === 0) return;
 
     const uniqueUrls = [...new Set(allUrls)];
-
-    // Suppress duplicate notifications for these URLs — they are
-    // intentionally being opened as a batch and already exist in the DB.
-    chrome.runtime.sendMessage({ type: "suppress-dupes", urls: uniqueUrls }).catch(() => {});
 
     // Find which tabs are already open in the browser (outside the target window).
     const openTabs = await chrome.tabs.query({});
@@ -769,12 +769,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         (t) => !normalizedOpen.has(api.normalizeUrlAggressive(t.url)),
       );
       if (tabsToOpen.length > 0) {
-        // Suppress duplicate notifications while restoring.
-        chrome.runtime.sendMessage({
-          type: "suppress-dupes",
-          urls: tabsToOpen.map((t) => t.url),
-        }).catch(() => {});
-
         for (let i = 0; i < tabsToOpen.length; i++) {
           const t = tabsToOpen[i]!;
           const created = await chrome.tabs.create({ url: t.url, active: i === 0 });

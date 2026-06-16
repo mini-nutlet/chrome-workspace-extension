@@ -76,21 +76,8 @@ async function removeTab(windowId: number, tabId: number): Promise<void> {
 
 // ── Duplicate Detection ────────────────────────────────────────────
 
-interface PendingDupe {
-  newTabId: number;
-  newWindowId: number;
-  existingTabId: number;
-  existingWindowId: number;
-}
-const pendingDupes = new Map<string, PendingDupe>();
-
 async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> {
   if (!isNavigable(tab.url) || tab.id == null) return false;
-
-  // Skip duplicate check for URLs suppressed by batch operations
-  // (openAllTabs, restoreSession).
-  const tabNorm = api.normalizeUrlAggressive(tab.url!);
-  if (suppressedDupeUrls.has(tabNorm)) return false;
 
   const data = await api.findDuplicate(tab.url!);
   if (!data || !data.duplicate || !data.tab) return false;
@@ -101,15 +88,14 @@ async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> 
   // ── Unified Single-Instance rules ────────────────────────────────
   // Load similarity rules and check if any enabled rule matches this URL.
   // If the matching rule has auto_switch enabled, silently switch to the
-  // existing tab.  Otherwise fall through to the notification prompt.
+  // existing tab.  Otherwise the duplicate tab is allowed to exist.
   let simRules: SimilarityRule[] = [];
   try { simRules = await loadSimilarityRules(); } catch { /* use default */ }
   const matchedRule = findRule(tab.url!, simRules);
   if (matchedRule && matchedRule.auto_switch) {
     // Try to close the new tab.  If the page requires a confirmation
     // (e.g. beforeunload handler, form data) or the tab is otherwise
-    // unclosable, fall through to the notification so the user can
-    // decide how to handle it.
+    // unclosable, allow the duplicate tab to exist.
     let closed = false;
     try {
       await chrome.tabs.remove(tab.id);
@@ -123,67 +109,13 @@ async function handleDuplicateAndSwitch(tab: chrome.tabs.Tab): Promise<boolean> 
       chrome.tabs.update(data.tab.chrome_tab_id, { active: true }).catch(() => {});
       return true; // switched — caller skips syncTab
     }
-    // Close failed — fall through to notification prompt below.
+    // Close failed — allow the duplicate tab to exist.
   }
 
-  const notifId = `dup-${tab.id}-${Date.now()}`;
-  pendingDupes.set(notifId, {
-    newTabId: tab.id, newWindowId: tab.windowId ?? 0,
-    existingTabId: data.tab.chrome_tab_id, existingWindowId: data.tab.window_id,
-  });
-
-  try {
-    await chrome.notifications.create(notifId, {
-      type: "basic", iconUrl: "icons/icon128.png",
-      title: "Duplicate Page",
-      message: `"${data.tab.title || tab.url}" is already open.\nSwitch to the existing tab?`,
-      buttons: [{ title: "Switch to existing" }, { title: "Keep both" }],
-      priority: 2,
-    });
-  } catch { pendingDupes.delete(notifId); }
   return false;
 }
 
-async function resolveDupe(notifId: string, switchToExisting: boolean) {
-  const info = pendingDupes.get(notifId);
-  if (!info) return;
-  pendingDupes.delete(notifId);
-  if (switchToExisting) {
-    // Await the remove — if it fails (beforeunload, already closed, etc.)
-    // don't switch away from the current tab.
-    try {
-      await chrome.tabs.remove(info.newTabId);
-      chrome.windows.update(info.existingWindowId, { focused: true }).catch(() => {});
-      chrome.tabs.update(info.existingTabId, { active: true }).catch(() => {});
-    } catch {
-      // Tab close failed — keep the user on the current (new) tab.
-    }
-  }
-}
-
-// ── Notification handlers ──────────────────────────────────────────
-
-// ── Dupe suppression for batch operations ─────────────────────────────
-// openAllTabs / restoreSession create many tabs; suppress duplicate
-// notifications for URLs that were just opened intentionally.
-
-const suppressedDupeUrls = new Set<string>();
-
-function suppressDupesForUrls(urls: string[], durationMs = 8000) {
-  for (const u of urls) {
-    try { suppressedDupeUrls.add(api.normalizeUrlAggressive(u)); } catch { suppressedDupeUrls.add(u.toLowerCase()); }
-  }
-  setTimeout(() => {
-    for (const u of urls) {
-      try { suppressedDupeUrls.delete(api.normalizeUrlAggressive(u)); } catch { suppressedDupeUrls.delete(u.toLowerCase()); }
-    }
-  }, durationMs);
-}
-
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "suppress-dupes" && Array.isArray(msg.urls)) {
-    suppressDupesForUrls(msg.urls, msg.durationMs ?? 8000);
-  }
   if (msg.type === "reapply-auto-group") {
     (async () => {
       const curId = await ensureCurrentWorkspace();
@@ -193,23 +125,6 @@ chrome.runtime.onMessage.addListener((msg) => {
       }
     })().catch(() => {});
   }
-});
-
-// ── Notification handlers ──────────────────────────────────────────
-
-chrome.notifications?.onButtonClicked?.addListener?.((notifId, btnIdx) => {
-  if (!notifId.startsWith("dup-")) return;
-  resolveDupe(notifId, btnIdx === 0);
-});
-
-chrome.notifications?.onClicked?.addListener?.((notifId) => {
-  if (!notifId.startsWith("dup-")) return;
-  resolveDupe(notifId, true);
-});
-
-chrome.notifications?.onClosed?.addListener?.((notifId) => {
-  if (!notifId.startsWith("dup-")) return;
-  pendingDupes.delete(notifId);
 });
 
 // ── Single new-tab enforcement (Opt 5) ─────────────────────────────

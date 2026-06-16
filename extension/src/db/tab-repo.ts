@@ -140,15 +140,27 @@ export async function upsertTab(tab: {
     return toApi(row, tw2);
   }
 
-  // Look up by window_id + chrome_tab_id (single readwrite tx for atomicity)
+  // Look up by window_id + chrome_tab_id (single readwrite tx for atomicity).
+  // Pre-load all workspace junctions so we can detect shared tab rows that
+  // belong to saved workspaces — those hold immutable URL snapshots and
+  // must not be overwritten by background sync servicing the Current workspace.
+  const allTw = await db.getAll("tabWorkspaces");
   const tx = db.transaction("tabs", "readwrite");
   const idx = tx.store.index("windowChrome");
   const existing = await idx.get([tab.window_id, tab.chrome_tab_id]);
 
   if (existing) {
-    existing.title = tab.title;
-    existing.url = tab.url;
-    existing.urlHash = urlHash;
+    // If this tab row is referenced by any workspace OTHER than the one
+    // being upserted into, treat it as a shared row — saved workspaces
+    // hold immutable URL snapshots and must not be overwritten.
+    const isShared = allTw.some(
+      (r: TabWorkspaceRow) => r.tabId === existing.id! && r.workspaceId !== tab.workspace_id,
+    );
+    if (!isShared) {
+      existing.title = tab.title;
+      existing.url = tab.url;
+      existing.urlHash = urlHash;
+    }
     existing.updatedAt = now();
     await tx.store.put(existing);
     await tx.done;
