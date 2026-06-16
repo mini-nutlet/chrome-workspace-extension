@@ -118,7 +118,7 @@ export function DroppableGroup({
         ) : (
           <span
             className="group-name"
-            onDoubleClick={isUngrouped ? undefined : handleRenameStart}
+            onDoubleClick={isUngrouped || isCurrent ? undefined : handleRenameStart}
             title={isUngrouped ? "Ungrouped is a special group" : undefined}
           >
             {group.name}
